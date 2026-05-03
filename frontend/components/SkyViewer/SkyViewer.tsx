@@ -499,9 +499,7 @@ function setObserverLocation(
 
 async function geocodeLocation(query: string) {
   const response = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-      query
-    )}`
+  `http://127.0.0.1:8000/api/geocode?query=${encodeURIComponent(query)}`
   );
   if (!response.ok) return null;
 

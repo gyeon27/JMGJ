@@ -40,3 +40,16 @@ dev-server.*.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# virtual env
+venv/
+.venv/
+
+# python env
+.env
