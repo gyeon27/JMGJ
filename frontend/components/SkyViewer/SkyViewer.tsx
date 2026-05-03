@@ -499,7 +499,7 @@ function setObserverLocation(
 
 async function geocodeLocation(query: string) {
   const response = await fetch(
-  `http://127.0.0.1:8000/api/geocode?query=${encodeURIComponent(query)}`
+  `https://jmgj-backend.onrender.com/api/geocode?query=${encodeURIComponent(query)}`
   );
   if (!response.ok) return null;
 
