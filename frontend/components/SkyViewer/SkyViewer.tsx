@@ -1,5 +1,7 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./SkyViewer.module.css";
+import { LocationPicker } from "./LocationPicker";
+import { ObjectInfoPanel } from "./ObjectInfoPanel";
 
 type SweObj = {
   v: number;
@@ -89,8 +91,6 @@ type ObjectInfo = {
   rightAscension: string;
   declination: string;
 };
-
-type LocationApplyState = "idle" | "loading" | "ok" | "error";
 
 type ObserverLocation = {
   latitude: number;
@@ -447,19 +447,23 @@ function findEngineObject(engine: StellariumEngine, term: string) {
 
 function addSolarSystemClickTargets(
   engine: StellariumEngine,
+  searchSuggestions: SearchSuggestion[],
   clickTargets: SearchSuggestion[]
 ) {
   for (const label of SOLAR_SYSTEM_TARGETS) {
     const obj = findEngineObject(engine, label);
     if (!obj) continue;
 
-    clickTargets.push({
+    const suggestion = {
       key: normalizeSearchKey(label),
       label,
       obj,
       vector: [],
       priority: 10,
-    });
+    };
+
+    searchSuggestions.push(suggestion);
+    clickTargets.push(suggestion);
   }
 }
 
@@ -495,26 +499,6 @@ function setObserverLocation(
   ];
 
   return values.some(Boolean);
-}
-
-async function geocodeLocation(query: string) {
-  const response = await fetch(
-  `https://jmgj-backend.onrender.com/api/geocode?query=${encodeURIComponent(query)}`
-  );
-  if (!response.ok) return null;
-
-  const results = (await response.json()) as Array<{
-    lat?: string;
-    lon?: string;
-  }>;
-  const first = results[0];
-  if (!first) return null;
-
-  const latitude = Number(first.lat);
-  const longitude = Number(first.lon);
-  if (![latitude, longitude].every(Number.isFinite)) return null;
-
-  return { latitude, longitude };
 }
 
 function getCoreNumber(engine: StellariumEngine, path: string, fallback: number) {
@@ -735,34 +719,6 @@ function labelForObject(
   return fallback;
 }
 
-function ObjectInfoPanel({ info }: { info: ObjectInfo | null }) {
-  if (!info) return null;
-
-  return (
-    <section className={styles.infoPanel} aria-label="Selected object info">
-      <h2>{info.name}</h2>
-      <dl>
-        <div>
-          <dt>고도</dt>
-          <dd>{info.altitude}</dd>
-        </div>
-        <div>
-          <dt>방위각</dt>
-          <dd>{info.azimuth}</dd>
-        </div>
-        <div>
-          <dt>적경</dt>
-          <dd>{info.rightAscension}</dd>
-        </div>
-        <div>
-          <dt>적위</dt>
-          <dd>{info.declination}</dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
 function selectEngineTarget(engine: StellariumEngine, target: SweObj) {
   trySetValue(engine, ["selection"], target);
   trySetValue(engine, ["pointer.visible"], true);
@@ -799,8 +755,6 @@ export default function SkyViewer() {
       latitude: SEOUL.latitude,
       longitude: SEOUL.longitude,
     });
-  const [locationState, setLocationState] =
-    useState<LocationApplyState>("idle");
   const [toggles, setToggles] = useState({
     horizontalCoordinates: false,
     atmosphere: false,
@@ -853,7 +807,11 @@ export default function SkyViewer() {
           searchSuggestionsRef.current,
           clickTargetsRef.current
         );
-        addSolarSystemClickTargets(engine, clickTargetsRef.current);
+        addSolarSystemClickTargets(
+          engine,
+          searchSuggestionsRef.current,
+          clickTargetsRef.current
+        );
         addFeaturedEngineClickTargets(engine, clickTargetsRef.current);
         if (disposed) return;
       } catch (error) {
@@ -884,6 +842,7 @@ export default function SkyViewer() {
     setSuggestions(
       searchSuggestionsRef.current
         .filter((item) => item.key.startsWith(key) || item.key.includes(key))
+        .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
         .slice(0, 8)
     );
   }
@@ -994,8 +953,13 @@ export default function SkyViewer() {
 
     try {
       const engineTarget = findEngineObject(engine, term);
+      const normalizedTerm = normalizeSearchKey(term);
+      const exactSuggestion =
+        suggestions.find((item) => item.key === normalizedTerm) ??
+        searchSuggestionsRef.current.find((item) => item.key === normalizedTerm);
       const target =
         engineTarget ??
+        exactSuggestion?.obj ??
         catalogSearchRef.current.get(normalizeSearchKey(term)) ??
         suggestions[0]?.obj ??
         null;
@@ -1005,8 +969,8 @@ export default function SkyViewer() {
 
       focusTarget(
         target,
-        suggestions[0]?.label ?? term,
-        engineTarget ? undefined : suggestions[0]?.vector
+        exactSuggestion?.label ?? suggestions[0]?.label ?? term,
+        engineTarget ? undefined : exactSuggestion?.vector ?? suggestions[0]?.vector
       );
     } catch (error) {
       console.error(error);
@@ -1025,37 +989,6 @@ export default function SkyViewer() {
           getObjectInfo(engine, selected.obj, selected.label, selected.vector)
         );
       }
-    }
-  }
-
-  async function handleLocationApply() {
-    const engine = engineRef.current;
-    if (!engine) return;
-
-    const query = locationQuery.trim();
-    if (!query) {
-      setLocationState("error");
-      return;
-    }
-
-    setLocationState("loading");
-    const location = await geocodeLocation(query);
-    if (!location) {
-      setLocationState("error");
-      return;
-    }
-
-    if (setObserverLocation(engine, location.latitude, location.longitude)) {
-      const selected = selectedTargetRef.current;
-      if (selected) {
-        setSelectedInfo(
-          getObjectInfo(engine, selected.obj, selected.label, selected.vector)
-        );
-      }
-      setObserverLocationState(location);
-      setLocationState("ok");
-    } else {
-      setLocationState("error");
     }
   }
 
@@ -1131,34 +1064,31 @@ export default function SkyViewer() {
           />
         </label>
 
-        <div className={styles.location}>
-          <div className={styles.locationField}>
-            <label>
-              <span>관측 위치</span>
-              <input
-                value={locationQuery}
-                onChange={(event) => {
-                  setLocationQuery(event.target.value);
-                  setLocationState("idle");
-                }}
-                placeholder="서울, 대전 과학고, 부산 해운대..."
-              />
-            </label>
-            <div className={styles.locationCoords} aria-live="polite">
-              <span>위도 {observerLocation.latitude.toFixed(4)}</span>
-              <span>경도 {observerLocation.longitude.toFixed(4)}</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className={styles[locationState]}
-            onClick={handleLocationApply}
-            disabled={status !== "ready" || locationState === "loading"}
-            aria-label="관측 위치 적용"
-          >
-            적용
-          </button>
-        </div>
+      <LocationPicker
+        status={status}
+        locationName={locationQuery}
+        observerLocation={observerLocation}
+        onApply={(location, name) => {
+          const engine = engineRef.current;
+          if (!engine) return false;
+
+          if (!setObserverLocation(engine, location.latitude, location.longitude)) {
+            return false;
+          }
+
+          setObserverLocationState(location);
+          setLocationQuery(name ?? "선택한 위치");
+
+          const selected = selectedTargetRef.current;
+          if (selected) {
+            setSelectedInfo(
+              getObjectInfo(engine, selected.obj, selected.label, selected.vector)
+            );
+          }
+
+          return true;
+        }}
+      />
 
         <div className={styles.buttonGrid} aria-label="Display toggles">
           <button

@@ -407,9 +407,6 @@ export function LocationPicker({
               <span>경도 {mapSelection.longitude.toFixed(6)}</span>
             </div>
             <div className={styles.mapActions}>
-              <button type="button" onClick={() => setIsMapOpen(false)}>
-                취소
-              </button>
               <button type="button" onClick={applyMapLocation}>
                 이 위치 적용
               </button>
