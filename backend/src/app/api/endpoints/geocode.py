@@ -203,6 +203,14 @@ def get_vworld_api_key() -> str | None:
     return value
 
 
+def get_vworld_headers() -> dict[str, str]:
+    headers = {"User-Agent": "JMGJ-school-project/0.1"}
+    referer = os.getenv("VWORLD_API_REFERER", "").strip()
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
 def result_type(result: dict) -> str:
     return str(result.get("addresstype") or result.get("type") or "")
 
@@ -421,6 +429,7 @@ async def fetch_vworld_coord_result(
                 "address": query,
                 "key": api_key,
             },
+            headers=get_vworld_headers(),
         )
     except httpx.HTTPError:
         return []
@@ -472,6 +481,7 @@ async def fetch_vworld_search_results(
                 "query": query,
                 "key": api_key,
             },
+            headers=get_vworld_headers(),
         )
     except httpx.HTTPError:
         return []
@@ -518,8 +528,8 @@ async def fetch_vworld_results(
     api_key: str,
 ) -> list[dict]:
     road_coord, parcel_coord, road_search, parcel_search = await asyncio.gather(
-        fetch_vworld_coord_result(client, query, "ROAD", api_key),
-        fetch_vworld_coord_result(client, query, "PARCEL", api_key),
+        fetch_vworld_coord_result(client, query, "road", api_key),
+        fetch_vworld_coord_result(client, query, "parcel", api_key),
         fetch_vworld_search_results(client, query, "road", api_key),
         fetch_vworld_search_results(client, query, "parcel", api_key),
     )
@@ -546,6 +556,7 @@ async def fetch_vworld_reverse_result(
                 "format": "json",
                 "key": api_key,
             },
+            headers=get_vworld_headers(),
         )
     except httpx.HTTPError:
         return {}
@@ -688,8 +699,8 @@ async def reverse_geocode(
     if vworld_api_key:
         async with httpx.AsyncClient(timeout=REVERSE_GEOCODE_TIMEOUT) as client:
             road_result, parcel_result = await asyncio.gather(
-                fetch_vworld_reverse_result(client, lat, lon, "ROAD", vworld_api_key),
-                fetch_vworld_reverse_result(client, lat, lon, "PARCEL", vworld_api_key),
+                fetch_vworld_reverse_result(client, lat, lon, "road", vworld_api_key),
+                fetch_vworld_reverse_result(client, lat, lon, "parcel", vworld_api_key),
             )
         result = road_result or parcel_result
         if result:
