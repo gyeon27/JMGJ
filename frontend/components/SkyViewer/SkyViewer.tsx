@@ -1,101 +1,30 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./SkyViewer.module.css";
+import {
+  getCoreNumber,
+  getObjectInfo,
+  projectTargetToScreen,
+} from "./coordinates";
 import { LocationPicker } from "./LocationPicker";
 import { ObjectInfoPanel } from "./ObjectInfoPanel";
-
-type SweObj = {
-  v: number;
-  id?: string;
-  path?: string;
-  name?: string;
-  add?: (obj: SweObj) => SweObj;
-  designations?: () => string[];
-  getInfo?: (format?: string, observer?: SweObj) => unknown;
-  getPath?: () => string;
-  radec?: number[];
-};
-
-type StellariumEngine = {
-  asm?: Record<string, (...args: number[]) => number>;
-  canvas?: HTMLCanvasElement;
-  core?: Record<string, unknown>;
-  observer?: SweObj;
-  convertFrame?: (
-    observer: SweObj,
-    origin: string,
-    dest: string,
-    vector: number[]
-  ) => number[];
-  createLayer?: (data: Record<string, unknown>) => SweObj | null;
-  createObj?: (type: string, args: Record<string, unknown>) => SweObj | null;
-  date2MJD?: (date: number) => number;
-  getObj?: (name: string) => SweObj | null;
-  getValue?: (path: string) => unknown;
-  lookAt?: (position: [number, number, number], duration?: number) => void;
-  pointAndLock?: (target: SweObj, duration?: number) => void;
-  setValue?: (path: string, value: unknown) => void;
-  _core_update?: () => void;
-  _core_set_time?: (mjd: number) => void;
-  _free?: (ptr: number) => void;
-  _malloc?: (size: number) => number;
-};
-
-type StellariumFactory = (options: {
-  canvasElement: HTMLCanvasElement;
-  wasmFile: string;
-}) => Promise<StellariumEngine>;
+import type {
+  BrightStar,
+  BrightStarCatalog,
+  EngineStatus,
+  ObjectInfo,
+  ObserverLocation,
+  SearchSuggestion,
+  SelectedTarget,
+  StellariumEngine,
+  StellariumFactory,
+  SweObj,
+} from "./types";
 
 declare global {
   interface Window {
     StelWebEngine?: StellariumFactory;
   }
 }
-
-type EngineStatus = "loading" | "ready" | "error";
-
-type BrightStar = {
-  hr: number;
-  hd: number | null;
-  name: string;
-  names: string[];
-  ra: number;
-  dec: number;
-  vmag: number;
-  spect: string;
-};
-
-type BrightStarCatalog = {
-  source: string;
-  count: number;
-  stars: BrightStar[];
-};
-
-type SearchSuggestion = {
-  key: string;
-  label: string;
-  obj: SweObj;
-  vector: number[];
-  priority?: number;
-};
-
-type SelectedTarget = {
-  label: string;
-  obj: SweObj;
-  vector?: number[];
-};
-
-type ObjectInfo = {
-  name: string;
-  altitude: string;
-  azimuth: string;
-  rightAscension: string;
-  declination: string;
-};
-
-type ObserverLocation = {
-  latitude: number;
-  longitude: number;
-};
 
 const SEOUL = {
   name: "서울",
@@ -501,106 +430,6 @@ function setObserverLocation(
   return values.some(Boolean);
 }
 
-function getCoreNumber(engine: StellariumEngine, path: string, fallback: number) {
-  const value = engine.getValue?.(path);
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-
-  const direct = path.split(".").reduce<unknown>((target, key) => {
-    if (!target || typeof target !== "object") return undefined;
-    return (target as Record<string, unknown>)[key];
-  }, engine.core);
-
-  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
-  if (
-    direct &&
-    typeof direct === "object" &&
-    typeof (direct as { v?: unknown }).v === "number" &&
-    Number.isFinite((direct as { v: number }).v)
-  ) {
-    return (direct as { v: number }).v;
-  }
-
-  return fallback;
-}
-
-function getTargetVector(
-  target: SweObj,
-  observer: SweObj | undefined,
-  fallback?: number[]
-) {
-  if (fallback && fallback.length >= 3) return fallback;
-
-  if (Array.isArray(target.radec) && target.radec.length >= 3) {
-    return target.radec.slice(0, 3).map(Number);
-  }
-
-  const info = target.getInfo?.("radec", observer);
-  if (Array.isArray(info) && info.length >= 3) {
-    return info.slice(0, 3).map(Number);
-  }
-
-  return null;
-}
-
-function projectTargetToScreen(
-  engine: StellariumEngine,
-  canvas: HTMLCanvasElement,
-  target: SweObj,
-  vector?: number[]
-) {
-  const observer = engine.observer ?? (engine.core?.observer as SweObj | undefined);
-  if (!observer || !engine.convertFrame) return null;
-
-  const targetVector = getTargetVector(target, observer, vector);
-  if (!targetVector || targetVector.some((value) => !Number.isFinite(value))) return null;
-
-  const view = engine.convertFrame(observer, "ICRF", "VIEW", targetVector);
-  if (!Array.isArray(view) || view.length < 3) return null;
-
-  const [x, y, z] = view;
-  if (![x, y, z].every(Number.isFinite)) return null;
-
-  const rect = canvas.getBoundingClientRect();
-  const rawFov = getCoreNumber(
-    engine,
-    "fov",
-    getCoreNumber(engine, "zoom", Math.PI / 3)
-  );
-  const fov = rawFov > Math.PI ? (rawFov * Math.PI) / 180 : rawFov;
-  const projection = getCoreNumber(engine, "projection", 0);
-  const distance = Math.hypot(x, y);
-
-  if (projection === 2) {
-    const forward = -z;
-    const angle = Math.atan2(distance, forward);
-    const radius = angle * (rect.height / fov);
-    const normalizedX = distance > 0 ? x / distance : 0;
-    const normalizedY = distance > 0 ? y / distance : 0;
-
-    return {
-      x: rect.width / 2 + normalizedY * radius,
-      y: rect.height / 2 + normalizedX * radius,
-    };
-  }
-
-  const angle = Math.atan2(distance, z);
-  const scale =
-    projection === 1
-        ? rect.height / 2 / Math.tan(fov / 4)
-        : rect.height / 2 / Math.tan(fov / 2);
-  const radius =
-    projection === 1
-        ? Math.tan(angle / 2) * scale
-        : Math.tan(angle) * scale;
-  const normalizedX = distance > 0 ? x / distance : 0;
-  const normalizedY = distance > 0 ? y / distance : 0;
-
-  return {
-    x: rect.width / 2 + normalizedX * radius,
-    y: rect.height / 2 - normalizedY * radius,
-  };
-}
-
 function getClickSelectionRadius(engine: StellariumEngine) {
   const rawFov = getCoreNumber(
     engine,
@@ -610,68 +439,6 @@ function getClickSelectionRadius(engine: StellariumEngine) {
   const fov = rawFov > Math.PI ? (rawFov * Math.PI) / 180 : rawFov;
 
   return Math.min(46, Math.max(22, 18 + fov * 13));
-}
-
-function vectorToSpherical(vector: number[]) {
-  const [x, y, z] = vector;
-  const radius = Math.hypot(x, y, z);
-  if (!radius) return null;
-
-  return {
-    longitude: normalizeDegrees((Math.atan2(y, x) * 180) / Math.PI),
-    latitude: (Math.asin(z / radius) * 180) / Math.PI,
-  };
-}
-
-function normalizeDegrees(value: number) {
-  const normalized = value % 360;
-  return normalized < 0 ? normalized + 360 : normalized;
-}
-
-function formatDegrees(value: number, signed = false) {
-  const sign = value < 0 ? "-" : signed ? "+" : "";
-  return `${sign}${Math.abs(value).toFixed(2)}°`;
-}
-
-function formatRightAscension(degrees: number) {
-  const totalSeconds = (normalizeDegrees(degrees) / 15) * 3600;
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = Math.round(totalSeconds % 60);
-
-  return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-function getObjectInfo(
-  engine: StellariumEngine,
-  target: SweObj,
-  label: string,
-  vector?: number[]
-): ObjectInfo | null {
-  const observer = engine.observer ?? (engine.core?.observer as SweObj | undefined);
-  if (!observer || !engine.convertFrame) return null;
-
-  const icrfVector = getTargetVector(target, observer, vector);
-  if (!icrfVector) return null;
-
-  const equatorial = vectorToSpherical(icrfVector);
-  const observedVector = engine.convertFrame(
-    observer,
-    "ICRF",
-    "OBSERVED",
-    icrfVector
-  );
-  const horizontal = vectorToSpherical(observedVector);
-
-  if (!equatorial || !horizontal) return null;
-
-  return {
-    name: label,
-    altitude: formatDegrees(horizontal.latitude, true),
-    azimuth: formatDegrees(horizontal.longitude),
-    rightAscension: formatRightAscension(equatorial.longitude),
-    declination: formatDegrees(equatorial.latitude, true),
-  };
 }
 
 function isSweObj(value: unknown): value is SweObj {

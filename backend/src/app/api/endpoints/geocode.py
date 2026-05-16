@@ -1,7 +1,18 @@
-from fastapi import APIRouter, Query
 import httpx
+import asyncio
+import os
+import time
+from fastapi import APIRouter, Query
 
 router = APIRouter()
+
+GEOCODE_TIMEOUT = httpx.Timeout(2.2, connect=0.8)
+REVERSE_GEOCODE_TIMEOUT = httpx.Timeout(1.8, connect=0.8)
+VWORLD_TIMEOUT = httpx.Timeout(2.0, connect=0.8)
+GEOCODE_CACHE_SECONDS = 600
+GEOCODE_MAX_VARIANTS = 4
+GEOCODE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+REVERSE_GEOCODE_CACHE: dict[str, tuple[float, dict]] = {}
 
 DETAILED_ADDRESS_TYPES = {
     "house_number",
@@ -168,6 +179,30 @@ def result_key(result: dict) -> str:
     )
 
 
+def get_cached(cache: dict, key: str):
+    cached = cache.get(key)
+    if not cached:
+        return None
+
+    expires_at, value = cached
+    if expires_at < time.monotonic():
+        cache.pop(key, None)
+        return None
+
+    return value
+
+
+def set_cached(cache: dict, key: str, value):
+    cache[key] = (time.monotonic() + GEOCODE_CACHE_SECONDS, value)
+
+
+def get_vworld_api_key() -> str | None:
+    value = os.getenv("VWORLD_API_KEY", "").strip()
+    if not value or value == "your-vworld-api-key":
+        return None
+    return value
+
+
 def result_type(result: dict) -> str:
     return str(result.get("addresstype") or result.get("type") or "")
 
@@ -248,18 +283,22 @@ async def fetch_nominatim_results(
     headers: dict[str, str],
     query: str,
 ) -> list[dict]:
-    response = await client.get(
-        "https://nominatim.openstreetmap.org/search",
-        params={
-            "format": "json",
-            "addressdetails": 1,
-            "countrycodes": "kr",
-            "dedupe": 0,
-            "limit": 10,
-            "q": query,
-        },
-        headers=headers,
-    )
+    try:
+        response = await client.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "format": "json",
+                "addressdetails": 1,
+                "countrycodes": "kr",
+                "dedupe": 0,
+                "limit": 10,
+                "q": query,
+            },
+            headers=headers,
+        )
+    except httpx.HTTPError:
+        return []
+
     if response.status_code != 200:
         return []
 
@@ -275,11 +314,15 @@ async def fetch_photon_results(
     headers: dict[str, str],
     query: str,
 ) -> list[dict]:
-    response = await client.get(
-        "https://photon.komoot.io/api/",
-        params={"q": query, "limit": 10},
-        headers=headers,
-    )
+    try:
+        response = await client.get(
+            "https://photon.komoot.io/api/",
+            params={"q": query, "limit": 10},
+            headers=headers,
+        )
+    except httpx.HTTPError:
+        return []
+
     if response.status_code != 200:
         return []
 
@@ -333,45 +376,297 @@ async def fetch_photon_results(
     return results
 
 
+def vworld_point_result(
+    point: dict,
+    display_name: str,
+    query: str,
+    address_type: str = "house_number",
+) -> dict | None:
+    longitude = point.get("x")
+    latitude = point.get("y")
+    if longitude is None or latitude is None:
+        return None
+
+    return {
+        "display_name": display_name or query,
+        "name": display_name or query,
+        "lat": str(latitude),
+        "lon": str(longitude),
+        "class": "vworld",
+        "type": address_type,
+        "addresstype": address_type,
+        "importance": 1,
+        "source": "vworld",
+    }
+
+
+async def fetch_vworld_coord_result(
+    client: httpx.AsyncClient,
+    query: str,
+    address_type: str,
+    api_key: str,
+) -> list[dict]:
+    try:
+        response = await client.get(
+            "https://api.vworld.kr/req/address",
+            params={
+                "service": "address",
+                "request": "getcoord",
+                "version": "2.0",
+                "crs": "EPSG:4326",
+                "refine": "true",
+                "simple": "false",
+                "format": "json",
+                "type": address_type,
+                "address": query,
+                "key": api_key,
+            },
+        )
+    except httpx.HTTPError:
+        return []
+
+    if response.status_code != 200:
+        return []
+
+    data = response.json()
+    envelope = data.get("response") if isinstance(data, dict) else None
+    if not isinstance(envelope, dict) or envelope.get("status") != "OK":
+        return []
+
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        return []
+
+    point = result.get("point")
+    if not isinstance(point, dict):
+        return []
+
+    refined = envelope.get("refined")
+    display_name = query
+    if isinstance(refined, dict):
+        display_name = str(refined.get("text") or query)
+
+    mapped = vworld_point_result(point, display_name, query)
+    return [mapped] if mapped else []
+
+
+async def fetch_vworld_search_results(
+    client: httpx.AsyncClient,
+    query: str,
+    category: str,
+    api_key: str,
+) -> list[dict]:
+    try:
+        response = await client.get(
+            "https://api.vworld.kr/req/search",
+            params={
+                "service": "search",
+                "request": "search",
+                "version": "2.0",
+                "format": "json",
+                "type": "address",
+                "category": category,
+                "crs": "EPSG:4326",
+                "size": 10,
+                "page": 1,
+                "query": query,
+                "key": api_key,
+            },
+        )
+    except httpx.HTTPError:
+        return []
+
+    if response.status_code != 200:
+        return []
+
+    data = response.json()
+    envelope = data.get("response") if isinstance(data, dict) else None
+    result = envelope.get("result") if isinstance(envelope, dict) else None
+    items = result.get("items") if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    mapped_results: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        point = item.get("point")
+        if not isinstance(point, dict):
+            continue
+
+        address = item.get("address")
+        display_name = str(item.get("title") or query)
+        if isinstance(address, dict):
+            display_name = str(
+                address.get("road")
+                or address.get("parcel")
+                or item.get("title")
+                or query
+            )
+
+        mapped = vworld_point_result(point, display_name, query)
+        if mapped:
+            mapped_results.append(mapped)
+
+    return mapped_results
+
+
+async def fetch_vworld_results(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    road_coord, parcel_coord, road_search, parcel_search = await asyncio.gather(
+        fetch_vworld_coord_result(client, query, "ROAD", api_key),
+        fetch_vworld_coord_result(client, query, "PARCEL", api_key),
+        fetch_vworld_search_results(client, query, "road", api_key),
+        fetch_vworld_search_results(client, query, "parcel", api_key),
+    )
+    return [*road_coord, *parcel_coord, *road_search, *parcel_search]
+
+
+async def fetch_vworld_reverse_result(
+    client: httpx.AsyncClient,
+    lat: float,
+    lon: float,
+    address_type: str,
+    api_key: str,
+) -> dict:
+    try:
+        response = await client.get(
+            "https://api.vworld.kr/req/address",
+            params={
+                "service": "address",
+                "request": "getaddress",
+                "version": "2.0",
+                "crs": "EPSG:4326",
+                "type": address_type,
+                "point": f"{lon},{lat}",
+                "format": "json",
+                "key": api_key,
+            },
+        )
+    except httpx.HTTPError:
+        return {}
+
+    if response.status_code != 200:
+        return {}
+
+    data = response.json()
+    envelope = data.get("response") if isinstance(data, dict) else None
+    result = envelope.get("result") if isinstance(envelope, dict) else None
+    if not isinstance(result, list) or not result:
+        return {}
+
+    first = result[0]
+    if not isinstance(first, dict):
+        return {}
+
+    text = first.get("text") or first.get("zipcode") or ""
+    return {
+        "display_name": str(text),
+        "name": str(text),
+        "lat": str(lat),
+        "lon": str(lon),
+        "source": "vworld",
+    }
+
+
+async def fetch_variant_results(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    query: str,
+    variant: str,
+    index: int,
+) -> tuple[int, list[dict]]:
+    if is_broad_admin_query(query) and index == 0:
+        photon_results = await fetch_photon_results(client, headers, variant)
+        if any(is_admin_office_result(result) for result in photon_results):
+            return index, photon_results
+
+        nominatim_results = await fetch_nominatim_results(client, headers, variant)
+        return index, [*photon_results, *nominatim_results]
+
+    photon_results, nominatim_results = await asyncio.gather(
+        fetch_photon_results(client, headers, variant),
+        fetch_nominatim_results(client, headers, variant),
+    )
+    return index, [*photon_results, *nominatim_results]
+
+
 @router.get("/")
 async def geocode(query: str = Query(..., min_length=2)):
+    normalized_query = " ".join(query.split())
+    cache_key = normalize_place_key(normalized_query)
+    cached = get_cached(GEOCODE_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     headers = {
         "Accept-Language": "ko,en",
         "User-Agent": "JMGJ-school-project/0.1",
     }
 
     collected: dict[str, tuple[dict, int]] = {}
-    variants = build_query_variants(query)
+    variants = build_query_variants(normalized_query)[:GEOCODE_MAX_VARIANTS]
+    vworld_api_key = get_vworld_api_key()
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for index, variant in enumerate(variants):
-            if is_broad_admin_query(query) and index == 0:
-                photon_results = await fetch_photon_results(client, headers, variant)
-                results = photon_results
-                if not any(is_admin_office_result(result) for result in photon_results):
-                    results = [
-                        *photon_results,
-                        *await fetch_nominatim_results(client, headers, variant),
-                    ]
-            else:
-                results = [
-                    *await fetch_photon_results(client, headers, variant),
-                    *await fetch_nominatim_results(client, headers, variant),
+    if vworld_api_key:
+        async with httpx.AsyncClient(timeout=VWORLD_TIMEOUT) as client:
+            vworld_variant_results = await asyncio.gather(
+                *[
+                    fetch_vworld_results(client, variant, vworld_api_key)
+                    for variant in variants
                 ]
+            )
+
+        for index, results in enumerate(vworld_variant_results):
             for result in results:
                 key = result_key(result)
                 if key not in collected:
                     collected[key] = (result, index)
 
-            if is_broad_admin_query(query) and collected:
-                break
+        vworld_ranked = sorted(
+            collected.values(),
+            key=lambda item: rank_result(item[0], normalized_query, item[1]),
+            reverse=True,
+        )
+        vworld_results = [
+            result
+            for result, _ in vworld_ranked
+            if is_acceptable_result(result, normalized_query)
+        ]
+        if vworld_results:
+            set_cached(GEOCODE_CACHE, cache_key, vworld_results)
+            return vworld_results
+
+    async with httpx.AsyncClient(timeout=GEOCODE_TIMEOUT) as client:
+        variant_results = await asyncio.gather(
+            *[
+                fetch_variant_results(client, headers, normalized_query, variant, index)
+                for index, variant in enumerate(variants)
+            ]
+        )
+
+        for index, results in variant_results:
+            for result in results:
+                key = result_key(result)
+                if key not in collected:
+                    collected[key] = (result, index)
 
     ranked = sorted(
         collected.values(),
-        key=lambda item: rank_result(item[0], query, item[1]),
+        key=lambda item: rank_result(item[0], normalized_query, item[1]),
         reverse=True,
     )
-    return [result for result, _ in ranked if is_acceptable_result(result, query)]
+    results = [
+        result
+        for result, _ in ranked
+        if is_acceptable_result(result, normalized_query)
+    ]
+    set_cached(GEOCODE_CACHE, cache_key, results)
+    return results
 
 
 @router.get("/reverse")
@@ -379,23 +674,43 @@ async def reverse_geocode(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
 ):
+    cache_key = f"{lat:.5f},{lon:.5f}"
+    cached = get_cached(REVERSE_GEOCODE_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     headers = {
         "Accept-Language": "ko,en",
         "User-Agent": "JMGJ-school-project/0.1",
     }
+    vworld_api_key = get_vworld_api_key()
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={
-                "format": "json",
-                "addressdetails": 1,
-                "lat": lat,
-                "lon": lon,
-                "zoom": 18,
-            },
-            headers=headers,
-        )
+    if vworld_api_key:
+        async with httpx.AsyncClient(timeout=REVERSE_GEOCODE_TIMEOUT) as client:
+            road_result, parcel_result = await asyncio.gather(
+                fetch_vworld_reverse_result(client, lat, lon, "ROAD", vworld_api_key),
+                fetch_vworld_reverse_result(client, lat, lon, "PARCEL", vworld_api_key),
+            )
+        result = road_result or parcel_result
+        if result:
+            set_cached(REVERSE_GEOCODE_CACHE, cache_key, result)
+            return result
+
+    async with httpx.AsyncClient(timeout=REVERSE_GEOCODE_TIMEOUT) as client:
+        try:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={
+                    "format": "json",
+                    "addressdetails": 1,
+                    "lat": lat,
+                    "lon": lon,
+                    "zoom": 18,
+                },
+                headers=headers,
+            )
+        except httpx.HTTPError:
+            return {}
 
     if response.status_code != 200:
         return {}
@@ -404,4 +719,5 @@ async def reverse_geocode(
     if not isinstance(result, dict):
         return {}
 
+    set_cached(REVERSE_GEOCODE_CACHE, cache_key, result)
     return result
