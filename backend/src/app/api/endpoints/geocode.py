@@ -204,11 +204,28 @@ def get_vworld_api_key() -> str | None:
 
 
 def get_vworld_headers() -> dict[str, str]:
-    headers = {"User-Agent": "JMGJ-school-project/0.1"}
+    headers = {
+        "Accept": "application/json,text/plain,*/*",
+        "User-Agent": "JMGJ-school-project/0.1",
+    }
     referer = os.getenv("VWORLD_API_REFERER", "").strip()
     if referer:
         headers["Referer"] = referer
     return headers
+
+
+def parse_json_response(response: httpx.Response) -> dict | None:
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+def text_snippet(response: httpx.Response, limit: int = 300) -> str:
+    text = response.text.strip().replace("\r", " ").replace("\n", " ")
+    return text[:limit]
 
 
 def result_type(result: dict) -> str:
@@ -425,6 +442,7 @@ async def fetch_vworld_coord_result(
                 "refine": "true",
                 "simple": "false",
                 "format": "json",
+                "errorformat": "json",
                 "type": address_type,
                 "address": query,
                 "key": api_key,
@@ -437,7 +455,10 @@ async def fetch_vworld_coord_result(
     if response.status_code != 200:
         return []
 
-    data = response.json()
+    data = parse_json_response(response)
+    if not data:
+        return []
+
     envelope = data.get("response") if isinstance(data, dict) else None
     if not isinstance(envelope, dict) or envelope.get("status") != "OK":
         return []
@@ -473,6 +494,7 @@ async def fetch_vworld_search_results(
                 "request": "search",
                 "version": "2.0",
                 "format": "json",
+                "errorformat": "json",
                 "type": "address",
                 "category": category,
                 "crs": "EPSG:4326",
@@ -489,7 +511,10 @@ async def fetch_vworld_search_results(
     if response.status_code != 200:
         return []
 
-    data = response.json()
+    data = parse_json_response(response)
+    if not data:
+        return []
+
     envelope = data.get("response") if isinstance(data, dict) else None
     result = envelope.get("result") if isinstance(envelope, dict) else None
     items = result.get("items") if isinstance(result, dict) else None
@@ -553,6 +578,7 @@ async def fetch_vworld_debug(
                 "refine": "true",
                 "simple": "false",
                 "format": "json",
+                "errorformat": "json",
                 "type": "road",
                 "address": query,
                 "key": api_key,
@@ -569,6 +595,7 @@ async def fetch_vworld_debug(
                 "refine": "true",
                 "simple": "false",
                 "format": "json",
+                "errorformat": "json",
                 "type": "parcel",
                 "address": query,
                 "key": api_key,
@@ -582,6 +609,7 @@ async def fetch_vworld_debug(
                 "request": "search",
                 "version": "2.0",
                 "format": "json",
+                "errorformat": "json",
                 "type": "address",
                 "category": "road",
                 "crs": "EPSG:4326",
@@ -602,7 +630,19 @@ async def fetch_vworld_debug(
                 params=params,
                 headers=get_vworld_headers(),
             )
-            data = response.json()
+            data = parse_json_response(response)
+            if not data:
+                diagnostics.append(
+                    {
+                        "name": name,
+                        "http_status": response.status_code,
+                        "content_type": response.headers.get("content-type"),
+                        "body": text_snippet(response),
+                        "params": safe_params,
+                    }
+                )
+                continue
+
             envelope = data.get("response") if isinstance(data, dict) else None
             result = envelope.get("result") if isinstance(envelope, dict) else None
             items = result.get("items") if isinstance(result, dict) else None
@@ -647,6 +687,7 @@ async def fetch_vworld_reverse_result(
                 "type": address_type,
                 "point": f"{lon},{lat}",
                 "format": "json",
+                "errorformat": "json",
                 "key": api_key,
             },
             headers=get_vworld_headers(),
@@ -657,7 +698,10 @@ async def fetch_vworld_reverse_result(
     if response.status_code != 200:
         return {}
 
-    data = response.json()
+    data = parse_json_response(response)
+    if not data:
+        return {}
+
     envelope = data.get("response") if isinstance(data, dict) else None
     result = envelope.get("result") if isinstance(envelope, dict) else None
     if not isinstance(result, list) or not result:
