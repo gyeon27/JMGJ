@@ -536,6 +536,99 @@ async def fetch_vworld_results(
     return [*road_coord, *parcel_coord, *road_search, *parcel_search]
 
 
+async def fetch_vworld_debug(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    checks = [
+        (
+            "address_getcoord_road",
+            "https://api.vworld.kr/req/address",
+            {
+                "service": "address",
+                "request": "getcoord",
+                "version": "2.0",
+                "crs": "EPSG:4326",
+                "refine": "true",
+                "simple": "false",
+                "format": "json",
+                "type": "road",
+                "address": query,
+                "key": api_key,
+            },
+        ),
+        (
+            "address_getcoord_parcel",
+            "https://api.vworld.kr/req/address",
+            {
+                "service": "address",
+                "request": "getcoord",
+                "version": "2.0",
+                "crs": "EPSG:4326",
+                "refine": "true",
+                "simple": "false",
+                "format": "json",
+                "type": "parcel",
+                "address": query,
+                "key": api_key,
+            },
+        ),
+        (
+            "search_address_road",
+            "https://api.vworld.kr/req/search",
+            {
+                "service": "search",
+                "request": "search",
+                "version": "2.0",
+                "format": "json",
+                "type": "address",
+                "category": "road",
+                "crs": "EPSG:4326",
+                "size": 3,
+                "page": 1,
+                "query": query,
+                "key": api_key,
+            },
+        ),
+    ]
+    diagnostics: list[dict] = []
+
+    for name, url, params in checks:
+        safe_params = {key: value for key, value in params.items() if key != "key"}
+        try:
+            response = await client.get(
+                url,
+                params=params,
+                headers=get_vworld_headers(),
+            )
+            data = response.json()
+            envelope = data.get("response") if isinstance(data, dict) else None
+            result = envelope.get("result") if isinstance(envelope, dict) else None
+            items = result.get("items") if isinstance(result, dict) else None
+            diagnostics.append(
+                {
+                    "name": name,
+                    "http_status": response.status_code,
+                    "vworld_status": envelope.get("status") if isinstance(envelope, dict) else None,
+                    "error": envelope.get("error") if isinstance(envelope, dict) else None,
+                    "has_result": bool(result),
+                    "item_count": len(items) if isinstance(items, list) else None,
+                    "params": safe_params,
+                }
+            )
+        except Exception as error:
+            diagnostics.append(
+                {
+                    "name": name,
+                    "error": type(error).__name__,
+                    "params": safe_params,
+                }
+            )
+
+    return diagnostics
+
+
 async def fetch_vworld_reverse_result(
     client: httpx.AsyncClient,
     lat: float,
@@ -607,7 +700,10 @@ async def fetch_variant_results(
 
 
 @router.get("/")
-async def geocode(query: str = Query(..., min_length=2)):
+async def geocode(
+    query: str = Query(..., min_length=2),
+    debug: bool = False,
+):
     normalized_query = " ".join(query.split())
     cache_key = normalize_place_key(normalized_query)
     cached = get_cached(GEOCODE_CACHE, cache_key)
@@ -622,6 +718,23 @@ async def geocode(query: str = Query(..., min_length=2)):
     collected: dict[str, tuple[dict, int]] = {}
     variants = build_query_variants(normalized_query)[:GEOCODE_MAX_VARIANTS]
     vworld_api_key = get_vworld_api_key()
+
+    if debug:
+        diagnostics = []
+        if vworld_api_key:
+            async with httpx.AsyncClient(timeout=VWORLD_TIMEOUT) as client:
+                diagnostics = await fetch_vworld_debug(
+                    client,
+                    normalized_query,
+                    vworld_api_key,
+                )
+        return {
+            "query": normalized_query,
+            "variants": variants,
+            "vworld_key_present": bool(vworld_api_key),
+            "vworld_referer": os.getenv("VWORLD_API_REFERER", "").strip() or None,
+            "vworld": diagnostics,
+        }
 
     if vworld_api_key:
         async with httpx.AsyncClient(timeout=VWORLD_TIMEOUT) as client:
