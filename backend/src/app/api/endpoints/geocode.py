@@ -9,10 +9,14 @@ router = APIRouter()
 GEOCODE_TIMEOUT = httpx.Timeout(2.2, connect=0.8)
 REVERSE_GEOCODE_TIMEOUT = httpx.Timeout(1.8, connect=0.8)
 VWORLD_TIMEOUT = httpx.Timeout(2.0, connect=0.8)
+KAKAO_TIMEOUT = httpx.Timeout(2.0, connect=0.8)
 GEOCODE_CACHE_SECONDS = 600
 GEOCODE_MAX_VARIANTS = 4
 GEOCODE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 REVERSE_GEOCODE_CACHE: dict[str, tuple[float, dict]] = {}
+KAKAO_ADDRESS_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+KAKAO_REVERSE_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
 VWORLD_ADDRESS_URLS = [
     "http://api.vworld.kr/req/address",
     "https://api.vworld.kr/req/address",
@@ -222,6 +226,21 @@ def get_vworld_headers() -> dict[str, str]:
     return headers
 
 
+def get_kakao_api_key() -> str | None:
+    value = os.getenv("KAKAO_REST_API_KEY", "").strip()
+    if not value or value == "your-kakao-rest-api-key":
+        return None
+    return value
+
+
+def get_kakao_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "Authorization": f"KakaoAK {api_key}",
+        "User-Agent": "JMGJ-school-project/0.1",
+    }
+
+
 def parse_json_response(response: httpx.Response) -> dict | None:
     try:
         data = response.json()
@@ -407,6 +426,187 @@ async def fetch_photon_results(
         )
 
     return results
+
+
+def kakao_address_result(document: dict, query: str) -> dict | None:
+    latitude = document.get("y")
+    longitude = document.get("x")
+    if latitude is None or longitude is None:
+        return None
+
+    road_address = document.get("road_address")
+    address = document.get("address")
+    road_name = ""
+    building_name = ""
+    address_name = str(document.get("address_name") or query)
+
+    if isinstance(road_address, dict):
+        road_name = str(road_address.get("address_name") or "")
+        building_name = str(road_address.get("building_name") or "")
+    if not road_name and isinstance(address, dict):
+        road_name = str(address.get("address_name") or "")
+
+    display_name = road_name or address_name
+    if building_name and building_name not in display_name:
+        display_name = f"{building_name}, {display_name}"
+
+    return {
+        "display_name": display_name,
+        "name": building_name or display_name,
+        "lat": str(latitude),
+        "lon": str(longitude),
+        "class": "kakao",
+        "type": "house_number",
+        "addresstype": "house_number",
+        "importance": 1,
+        "source": "kakao_address",
+    }
+
+
+def kakao_keyword_result(document: dict, query: str) -> dict | None:
+    latitude = document.get("y")
+    longitude = document.get("x")
+    if latitude is None or longitude is None:
+        return None
+
+    place_name = str(document.get("place_name") or query)
+    road_address = str(document.get("road_address_name") or "")
+    parcel_address = str(document.get("address_name") or "")
+    category = str(document.get("category_group_name") or document.get("category_name") or "")
+    display_parts = [place_name, road_address or parcel_address]
+    if category:
+        display_parts.append(category)
+
+    return {
+        "display_name": ", ".join(part for part in display_parts if part),
+        "name": place_name,
+        "lat": str(latitude),
+        "lon": str(longitude),
+        "class": "kakao",
+        "type": "amenity",
+        "addresstype": "amenity",
+        "importance": 1,
+        "source": "kakao_keyword",
+    }
+
+
+async def fetch_kakao_address_results(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    try:
+        response = await client.get(
+            KAKAO_ADDRESS_URL,
+            params={"query": query, "size": 10},
+            headers=get_kakao_headers(api_key),
+        )
+    except httpx.HTTPError:
+        return []
+
+    if response.status_code != 200:
+        return []
+
+    data = parse_json_response(response)
+    documents = data.get("documents") if isinstance(data, dict) else None
+    if not isinstance(documents, list):
+        return []
+
+    results: list[dict] = []
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        mapped = kakao_address_result(document, query)
+        if mapped:
+            results.append(mapped)
+    return results
+
+
+async def fetch_kakao_keyword_results(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    try:
+        response = await client.get(
+            KAKAO_KEYWORD_URL,
+            params={"query": query, "size": 10},
+            headers=get_kakao_headers(api_key),
+        )
+    except httpx.HTTPError:
+        return []
+
+    if response.status_code != 200:
+        return []
+
+    data = parse_json_response(response)
+    documents = data.get("documents") if isinstance(data, dict) else None
+    if not isinstance(documents, list):
+        return []
+
+    results: list[dict] = []
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        mapped = kakao_keyword_result(document, query)
+        if mapped:
+            results.append(mapped)
+    return results
+
+
+async def fetch_kakao_results(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    address_results, keyword_results = await asyncio.gather(
+        fetch_kakao_address_results(client, query, api_key),
+        fetch_kakao_keyword_results(client, query, api_key),
+    )
+    return [*address_results, *keyword_results]
+
+
+async def fetch_kakao_debug(
+    client: httpx.AsyncClient,
+    query: str,
+    api_key: str,
+) -> list[dict]:
+    checks = [
+        ("address", KAKAO_ADDRESS_URL, {"query": query, "size": 3}),
+        ("keyword", KAKAO_KEYWORD_URL, {"query": query, "size": 3}),
+    ]
+    diagnostics: list[dict] = []
+
+    for name, url, params in checks:
+        try:
+            response = await client.get(
+                url,
+                params=params,
+                headers=get_kakao_headers(api_key),
+            )
+            data = parse_json_response(response)
+            documents = data.get("documents") if isinstance(data, dict) else None
+            meta = data.get("meta") if isinstance(data, dict) else None
+            diagnostics.append(
+                {
+                    "name": name,
+                    "http_status": response.status_code,
+                    "document_count": len(documents) if isinstance(documents, list) else None,
+                    "total_count": meta.get("total_count") if isinstance(meta, dict) else None,
+                    "body": None if data else text_snippet(response),
+                    "params": params,
+                }
+            )
+        except Exception as error:
+            diagnostics.append(
+                {
+                    "name": name,
+                    "error": type(error).__name__,
+                    "params": params,
+                }
+            )
+
+    return diagnostics
 
 
 def vworld_point_result(
@@ -782,6 +982,52 @@ async def fetch_vworld_reverse_result(
     }
 
 
+async def fetch_kakao_reverse_result(
+    client: httpx.AsyncClient,
+    lat: float,
+    lon: float,
+    api_key: str,
+) -> dict:
+    try:
+        response = await client.get(
+            KAKAO_REVERSE_URL,
+            params={"x": lon, "y": lat, "input_coord": "WGS84"},
+            headers=get_kakao_headers(api_key),
+        )
+    except httpx.HTTPError:
+        return {}
+
+    if response.status_code != 200:
+        return {}
+
+    data = parse_json_response(response)
+    documents = data.get("documents") if isinstance(data, dict) else None
+    if not isinstance(documents, list) or not documents:
+        return {}
+
+    first = documents[0]
+    if not isinstance(first, dict):
+        return {}
+
+    road_address = first.get("road_address")
+    address = first.get("address")
+    display_name = ""
+    if isinstance(road_address, dict):
+        display_name = str(road_address.get("address_name") or "")
+    if not display_name and isinstance(address, dict):
+        display_name = str(address.get("address_name") or "")
+    if not display_name:
+        return {}
+
+    return {
+        "display_name": display_name,
+        "name": display_name,
+        "lat": str(lat),
+        "lon": str(lon),
+        "source": "kakao",
+    }
+
+
 async def fetch_variant_results(
     client: httpx.AsyncClient,
     headers: dict[str, str],
@@ -823,13 +1069,22 @@ async def geocode(
 
     collected: dict[str, tuple[dict, int]] = {}
     variants = build_query_variants(normalized_query)[:GEOCODE_MAX_VARIANTS]
+    kakao_api_key = get_kakao_api_key()
     vworld_api_key = get_vworld_api_key()
 
     if debug:
-        diagnostics = []
+        kakao_diagnostics = []
+        vworld_diagnostics = []
+        if kakao_api_key:
+            async with httpx.AsyncClient(timeout=KAKAO_TIMEOUT) as client:
+                kakao_diagnostics = await fetch_kakao_debug(
+                    client,
+                    normalized_query,
+                    kakao_api_key,
+                )
         if vworld_api_key:
             async with httpx.AsyncClient(timeout=VWORLD_TIMEOUT) as client:
-                diagnostics = await fetch_vworld_debug(
+                vworld_diagnostics = await fetch_vworld_debug(
                     client,
                     normalized_query,
                     vworld_api_key,
@@ -837,10 +1092,41 @@ async def geocode(
         return {
             "query": normalized_query,
             "variants": variants,
+            "kakao_key_present": bool(kakao_api_key),
+            "kakao": kakao_diagnostics,
             "vworld_key_present": bool(vworld_api_key),
             "vworld_referer": os.getenv("VWORLD_API_REFERER", "").strip() or None,
-            "vworld": diagnostics,
+            "vworld": vworld_diagnostics,
         }
+
+    if kakao_api_key:
+        async with httpx.AsyncClient(timeout=KAKAO_TIMEOUT) as client:
+            kakao_variant_results = await asyncio.gather(
+                *[
+                    fetch_kakao_results(client, variant, kakao_api_key)
+                    for variant in variants
+                ]
+            )
+
+        for index, results in enumerate(kakao_variant_results):
+            for result in results:
+                key = result_key(result)
+                if key not in collected:
+                    collected[key] = (result, index)
+
+        kakao_ranked = sorted(
+            collected.values(),
+            key=lambda item: rank_result(item[0], normalized_query, item[1]),
+            reverse=True,
+        )
+        kakao_results = [
+            result
+            for result, _ in kakao_ranked
+            if is_acceptable_result(result, normalized_query)
+        ]
+        if kakao_results:
+            set_cached(GEOCODE_CACHE, cache_key, kakao_results)
+            return kakao_results
 
     if vworld_api_key:
         async with httpx.AsyncClient(timeout=VWORLD_TIMEOUT) as client:
@@ -913,7 +1199,15 @@ async def reverse_geocode(
         "Accept-Language": "ko,en",
         "User-Agent": "JMGJ-school-project/0.1",
     }
+    kakao_api_key = get_kakao_api_key()
     vworld_api_key = get_vworld_api_key()
+
+    if kakao_api_key:
+        async with httpx.AsyncClient(timeout=REVERSE_GEOCODE_TIMEOUT) as client:
+            result = await fetch_kakao_reverse_result(client, lat, lon, kakao_api_key)
+        if result:
+            set_cached(REVERSE_GEOCODE_CACHE, cache_key, result)
+            return result
 
     if vworld_api_key:
         async with httpx.AsyncClient(timeout=REVERSE_GEOCODE_TIMEOUT) as client:
