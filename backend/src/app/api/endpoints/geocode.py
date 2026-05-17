@@ -750,9 +750,10 @@ async def geocode(
 ):
     normalized_query = " ".join(query.split())
     cache_key = normalize_place_key(normalized_query)
-    cached = get_cached(GEOCODE_CACHE, cache_key)
-    if cached is not None:
-        return cached
+    if not debug:
+        cached = get_cached(GEOCODE_CACHE, cache_key)
+        if cached is not None:
+            return cached
 
     headers = {
         "Accept-Language": "ko,en",
