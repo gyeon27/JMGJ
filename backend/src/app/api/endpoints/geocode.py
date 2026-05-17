@@ -13,6 +13,14 @@ GEOCODE_CACHE_SECONDS = 600
 GEOCODE_MAX_VARIANTS = 4
 GEOCODE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 REVERSE_GEOCODE_CACHE: dict[str, tuple[float, dict]] = {}
+VWORLD_ADDRESS_URLS = [
+    "http://api.vworld.kr/req/address",
+    "https://api.vworld.kr/req/address",
+]
+VWORLD_SEARCH_URLS = [
+    "http://api.vworld.kr/req/search",
+    "https://api.vworld.kr/req/search",
+]
 
 DETAILED_ADDRESS_TYPES = {
     "house_number",
@@ -431,28 +439,34 @@ async def fetch_vworld_coord_result(
     address_type: str,
     api_key: str,
 ) -> list[dict]:
-    try:
-        response = await client.get(
-            "https://api.vworld.kr/req/address",
-            params={
-                "service": "address",
-                "request": "getcoord",
-                "version": "2.0",
-                "crs": "EPSG:4326",
-                "refine": "true",
-                "simple": "false",
-                "format": "json",
-                "errorformat": "json",
-                "type": address_type,
-                "address": query,
-                "key": api_key,
-            },
-            headers=get_vworld_headers(),
-        )
-    except httpx.HTTPError:
-        return []
+    params = {
+        "service": "address",
+        "request": "getcoord",
+        "version": "2.0",
+        "crs": "EPSG:4326",
+        "refine": "true",
+        "simple": "false",
+        "format": "json",
+        "errorformat": "json",
+        "type": address_type,
+        "address": query,
+        "key": api_key,
+    }
+    response = None
+    for url in VWORLD_ADDRESS_URLS:
+        try:
+            response = await client.get(
+                url,
+                params=params,
+                headers=get_vworld_headers(),
+            )
+        except httpx.HTTPError:
+            continue
 
-    if response.status_code != 200:
+        if response.status_code == 200:
+            break
+
+    if not response or response.status_code != 200:
         return []
 
     data = parse_json_response(response)
@@ -486,29 +500,35 @@ async def fetch_vworld_search_results(
     category: str,
     api_key: str,
 ) -> list[dict]:
-    try:
-        response = await client.get(
-            "https://api.vworld.kr/req/search",
-            params={
-                "service": "search",
-                "request": "search",
-                "version": "2.0",
-                "format": "json",
-                "errorformat": "json",
-                "type": "address",
-                "category": category,
-                "crs": "EPSG:4326",
-                "size": 10,
-                "page": 1,
-                "query": query,
-                "key": api_key,
-            },
-            headers=get_vworld_headers(),
-        )
-    except httpx.HTTPError:
-        return []
+    params = {
+        "service": "search",
+        "request": "search",
+        "version": "2.0",
+        "format": "json",
+        "errorformat": "json",
+        "type": "address",
+        "category": category,
+        "crs": "EPSG:4326",
+        "size": 10,
+        "page": 1,
+        "query": query,
+        "key": api_key,
+    }
+    response = None
+    for url in VWORLD_SEARCH_URLS:
+        try:
+            response = await client.get(
+                url,
+                params=params,
+                headers=get_vworld_headers(),
+            )
+        except httpx.HTTPError:
+            continue
 
-    if response.status_code != 200:
+        if response.status_code == 200:
+            break
+
+    if not response or response.status_code != 200:
         return []
 
     data = parse_json_response(response)
@@ -568,7 +588,24 @@ async def fetch_vworld_debug(
 ) -> list[dict]:
     checks = [
         (
-            "address_getcoord_road",
+            "address_getcoord_road_http",
+            "http://api.vworld.kr/req/address",
+            {
+                "service": "address",
+                "request": "getcoord",
+                "version": "2.0",
+                "crs": "EPSG:4326",
+                "refine": "true",
+                "simple": "false",
+                "format": "json",
+                "errorformat": "json",
+                "type": "road",
+                "address": query,
+                "key": api_key,
+            },
+        ),
+        (
+            "address_getcoord_road_https",
             "https://api.vworld.kr/req/address",
             {
                 "service": "address",
@@ -585,8 +622,8 @@ async def fetch_vworld_debug(
             },
         ),
         (
-            "address_getcoord_parcel",
-            "https://api.vworld.kr/req/address",
+            "address_getcoord_parcel_http",
+            "http://api.vworld.kr/req/address",
             {
                 "service": "address",
                 "request": "getcoord",
@@ -602,7 +639,25 @@ async def fetch_vworld_debug(
             },
         ),
         (
-            "search_address_road",
+            "search_address_road_http",
+            "http://api.vworld.kr/req/search",
+            {
+                "service": "search",
+                "request": "search",
+                "version": "2.0",
+                "format": "json",
+                "errorformat": "json",
+                "type": "address",
+                "category": "road",
+                "crs": "EPSG:4326",
+                "size": 3,
+                "page": 1,
+                "query": query,
+                "key": api_key,
+            },
+        ),
+        (
+            "search_address_road_https",
             "https://api.vworld.kr/req/search",
             {
                 "service": "search",
@@ -676,26 +731,32 @@ async def fetch_vworld_reverse_result(
     address_type: str,
     api_key: str,
 ) -> dict:
-    try:
-        response = await client.get(
-            "https://api.vworld.kr/req/address",
-            params={
-                "service": "address",
-                "request": "getaddress",
-                "version": "2.0",
-                "crs": "EPSG:4326",
-                "type": address_type,
-                "point": f"{lon},{lat}",
-                "format": "json",
-                "errorformat": "json",
-                "key": api_key,
-            },
-            headers=get_vworld_headers(),
-        )
-    except httpx.HTTPError:
-        return {}
+    params = {
+        "service": "address",
+        "request": "getaddress",
+        "version": "2.0",
+        "crs": "EPSG:4326",
+        "type": address_type,
+        "point": f"{lon},{lat}",
+        "format": "json",
+        "errorformat": "json",
+        "key": api_key,
+    }
+    response = None
+    for url in VWORLD_ADDRESS_URLS:
+        try:
+            response = await client.get(
+                url,
+                params=params,
+                headers=get_vworld_headers(),
+            )
+        except httpx.HTTPError:
+            continue
 
-    if response.status_code != 200:
+        if response.status_code == 200:
+            break
+
+    if not response or response.status_code != 200:
         return {}
 
     data = parse_json_response(response)
