@@ -8,10 +8,17 @@ export type SweObj = {
   path?: string;
   name?: string;
   add?: (obj: SweObj) => SweObj;
+  remove?: (obj: SweObj) => void;
+  destroy?: () => void;
+  addDataSource?: (args: { url: string; key?: string }) => void;
   designations?: () => string[];
   getInfo?: (format?: string, observer?: SweObj) => unknown;
   getPath?: () => string;
+  jsonData?: {
+    model_data?: Record<string, unknown>;
+  };
   radec?: number[];
+  update?: () => void;
 };
 
 export type StellariumEngine = {
@@ -34,7 +41,8 @@ export type StellariumEngine = {
   pointAndLock?: (target: SweObj, duration?: number) => void;
   setValue?: (path: string, value: unknown) => void;
   _core_update?: () => void;
-  _core_set_time?: (mjd: number) => void;
+  _core_set_time?: (mjd: number, duration: number) => void;
+  _observer_update?: (observer: number, fast: boolean) => void;
   _free?: (ptr: number) => void;
   _malloc?: (size: number) => number;
 };
@@ -55,10 +63,18 @@ export type GeocodeResult = ObserverLocation & {
 
 export type ObjectInfo = {
   name: string;
+  aliases: string[];
   altitude: string;
   azimuth: string;
   rightAscension: string;
   declination: string;
+  apparentMagnitude: string;
+  absoluteMagnitude: string;
+  distance: string;
+  distanceModulus: string;
+  objectType: string;
+  dimensions: string;
+  spectrum: string;
 };
 
 export type BrightStar = {
@@ -72,6 +88,13 @@ export type BrightStar = {
   spect: string;
 };
 
+export type RenderStar = Pick<
+  BrightStar,
+  "hr" | "name" | "names" | "ra" | "dec" | "vmag"
+> & {
+  vector: number[];
+};
+
 export type BrightStarCatalog = {
   source: string;
   count: number;
@@ -82,7 +105,7 @@ export type SearchSuggestion = {
   key: string;
   label: string;
   obj: SweObj;
-  vector: number[];
+  vector?: number[];
   priority?: number;
 };
 

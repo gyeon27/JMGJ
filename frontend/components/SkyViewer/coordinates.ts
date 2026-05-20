@@ -41,15 +41,29 @@ export function getTargetVector(
     if (vector.every(Number.isFinite)) return vector;
   }
 
-  const info = target.getInfo?.("radec", observer);
-  if (Array.isArray(info) && info.length >= 3) {
-    const vector = info.slice(0, 3).map(Number);
-    if (vector.every(Number.isFinite)) return vector;
+  try {
+    target.update?.();
+  } catch {
+    // Engine-native solar-system objects may update through the core frame only.
   }
 
-  if (Array.isArray(target.radec) && target.radec.length >= 3) {
-    const vector = target.radec.slice(0, 3).map(Number);
-    if (vector.every(Number.isFinite)) return vector;
+  try {
+    const info = target.getInfo?.("radec", observer);
+    if (Array.isArray(info) && info.length >= 3) {
+      const vector = info.slice(0, 3).map(Number);
+      if (vector.every(Number.isFinite)) return vector;
+    }
+  } catch {
+    // Some engine objects throw while ephemerides are still warming up.
+  }
+
+  try {
+    if (Array.isArray(target.radec) && target.radec.length >= 3) {
+      const vector = target.radec.slice(0, 3).map(Number);
+      if (vector.every(Number.isFinite)) return vector;
+    }
+  } catch {
+    // Fall back below.
   }
 
   if (fallback && fallback.length >= 3) {
@@ -151,6 +165,111 @@ function formatRightAscension(degrees: number) {
   ).padStart(2, "0")}s`;
 }
 
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+type SupplementalObjectInfo = {
+  distanceParsec?: number;
+  absoluteMagnitude?: number;
+  objectType?: string;
+};
+
+const SUPPLEMENTAL_OBJECT_INFO: Record<string, SupplementalObjectInfo> = {
+  "m 3": {
+    distanceParsec: 10_400,
+    objectType: "구상성단",
+  },
+  "messier 3": {
+    distanceParsec: 10_400,
+    objectType: "구상성단",
+  },
+  "ngc 5272": {
+    distanceParsec: 10_400,
+    objectType: "구상성단",
+  },
+};
+
+function getInfoNumber(target: SweObj, observer: SweObj, keys: string[]) {
+  for (const key of keys) {
+    try {
+      const value = target.getInfo?.(key, observer);
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+    } catch {
+      // Info availability differs by object type.
+    }
+  }
+
+  return null;
+}
+
+function formatMagnitude(value: number | null) {
+  return value === null ? "정보 없음" : value.toFixed(2);
+}
+
+function formatDistance(value: number | null) {
+  if (value === null || value <= 0) return "정보 없음";
+  if (value < 0.001) return `${(value * 149_597_870.7).toFixed(0)} km`;
+  if (value < 10_000) return `${value.toFixed(3)} AU`;
+  return `${value.toExponential(3)} AU`;
+}
+
+function formatParsecDistance(value: number | null) {
+  if (value === null || value <= 0) return "정보 없음";
+  const lightYears = value * 3.26156;
+  if (lightYears >= 10_000) return `${(lightYears / 1000).toFixed(1)} kly`;
+  if (lightYears >= 1000) return `${(lightYears / 1000).toFixed(2)} kly`;
+  return `${lightYears.toFixed(0)} ly`;
+}
+
+function formatDimensions(modelData: Record<string, unknown> | undefined) {
+  const dimX = readNumber(modelData?.dimx);
+  const dimY = readNumber(modelData?.dimy);
+  if (dimX === null && dimY === null) return "정보 없음";
+  if (dimX !== null && dimY !== null) {
+    return `${dimX.toFixed(1)}′ × ${dimY.toFixed(1)}′`;
+  }
+  return `${(dimX ?? dimY)?.toFixed(1)}′`;
+}
+
+function cleanDesignation(value: string) {
+  return value.replace(/^NAME\s+/i, "").replace(/\s+/g, " ").trim();
+}
+
+function getAliases(target: SweObj, primaryName: string) {
+  try {
+    const primaryKey = primaryName.toLowerCase();
+    const seen = new Set<string>();
+    return (target.designations?.() ?? [])
+      .map(cleanDesignation)
+      .filter((name) => {
+        const key = name.toLowerCase();
+        if (!name || key === primaryKey || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+function getSupplementalObjectInfo(
+  target: SweObj,
+  primaryName: string
+): SupplementalObjectInfo | null {
+  const names = [primaryName, ...(target.designations?.() ?? [])].map((name) =>
+    cleanDesignation(name).toLowerCase()
+  );
+
+  for (const name of names) {
+    const info = SUPPLEMENTAL_OBJECT_INFO[name];
+    if (info) return info;
+  }
+
+  return null;
+}
+
 export function getObjectInfo(
   engine: StellariumEngine,
   target: SweObj,
@@ -160,10 +279,18 @@ export function getObjectInfo(
   const observer = getObserver(engine);
   if (!observer || !engine.convertFrame) return null;
 
-  const icrfVector = getTargetVector(target, observer, vector);
+  const icrfVector = getTargetVector(target, observer, vector, {
+    preferFallback: Boolean(vector?.length),
+  });
   if (!icrfVector) return null;
 
-  const equatorial = vectorToSpherical(icrfVector);
+  const apparentEquatorialVector = engine.convertFrame(
+    observer,
+    "ICRF",
+    "JNOW",
+    icrfVector
+  );
+  const equatorial = vectorToSpherical(apparentEquatorialVector);
   const observedVector = engine.convertFrame(
     observer,
     "ICRF",
@@ -174,11 +301,41 @@ export function getObjectInfo(
 
   if (!equatorial || !horizontal) return null;
 
+  const modelData = target.jsonData?.model_data;
+  const supplementalInfo = getSupplementalObjectInfo(target, label);
+  const apparentMagnitude =
+    getInfoNumber(target, observer, ["VMAG", "vmag"]) ??
+    readNumber(modelData?.Vmag) ??
+    readNumber(modelData?.vmag) ??
+    readNumber(modelData?.Bmag);
+  const distanceAu = getInfoNumber(target, observer, ["DISTANCE", "distance"]);
+  const distanceParsec = supplementalInfo?.distanceParsec ?? null;
+  const absoluteMagnitude =
+    supplementalInfo?.absoluteMagnitude ??
+    (apparentMagnitude !== null && distanceParsec !== null && distanceParsec > 0
+      ? apparentMagnitude - 5 * Math.log10(distanceParsec / 10)
+      : null);
+  const distanceModulus =
+    apparentMagnitude !== null && absoluteMagnitude !== null
+      ? apparentMagnitude - absoluteMagnitude
+      : null;
+  const distanceText =
+    distanceParsec !== null ? formatParsecDistance(distanceParsec) : formatDistance(distanceAu);
+
   return {
     name: label,
+    aliases: getAliases(target, label),
     altitude: formatDegrees(horizontal.latitude, true),
     azimuth: formatDegrees(horizontal.longitude),
     rightAscension: formatRightAscension(equatorial.longitude),
     declination: formatDegrees(equatorial.latitude, true),
+    apparentMagnitude: formatMagnitude(apparentMagnitude),
+    absoluteMagnitude: formatMagnitude(absoluteMagnitude),
+    distance: distanceText,
+    distanceModulus: formatMagnitude(distanceModulus),
+    objectType:
+      supplementalInfo?.objectType ?? target.id?.replace(/^NAME\s+/i, "") ?? "정보 없음",
+    dimensions: formatDimensions(modelData),
+    spectrum: typeof modelData?.spect_t === "string" ? modelData.spect_t : "정보 없음",
   };
 }

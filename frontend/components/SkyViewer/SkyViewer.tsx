@@ -1,8 +1,17 @@
-import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import styles from "./SkyViewer.module.css";
 import {
   getCoreNumber,
   getObjectInfo,
+  getTargetVector,
   projectTargetToScreen,
 } from "./coordinates";
 import { LocationPicker } from "./LocationPicker";
@@ -34,19 +43,7 @@ const SEOUL = {
 };
 
 const MAX_RENDERED_STAR_MAG = 5.8;
-
-const SOLAR_SYSTEM_TARGETS = [
-  "Sun",
-  "Moon",
-  "Mercury",
-  "Venus",
-  "Mars",
-  "Jupiter",
-  "Saturn",
-  "Uranus",
-  "Neptune",
-];
-
+const DEG_TO_RAD = Math.PI / 180;
 const FEATURED_STAR_NAMES = new Set(
   [
     "sirius",
@@ -86,22 +83,88 @@ const TOGGLE_PATHS = {
   ground: ["landscapes.visible"],
 };
 
+const TIME_SPEEDS = [
+  { label: "1x", multiplier: 1 },
+  { label: "2x", multiplier: 2 },
+  { label: "3x", multiplier: 3 },
+  { label: "4x", multiplier: 4 },
+];
+
+const SOLAR_SYSTEM_ALIASES = new Map(
+  [
+    ["태양", "Sun"],
+    ["해", "Sun"],
+    ["달", "Moon"],
+    ["월", "Moon"],
+    ["수성", "Mercury"],
+    ["금성", "Venus"],
+    ["화성", "Mars"],
+    ["목성", "Jupiter"],
+    ["토성", "Saturn"],
+    ["천왕성", "Uranus"],
+    ["해왕성", "Neptune"],
+  ].map(([alias, target]) => [normalizeSearchKey(alias), target])
+);
+
+const SOLAR_SYSTEM_LABELS = new Map([
+  ["Sun", "Sun"],
+  ["Moon", "Moon"],
+  ["Mercury", "Mercury"],
+  ["Venus", "Venus"],
+  ["Mars", "Mars"],
+  ["Jupiter", "Jupiter"],
+  ["Saturn", "Saturn"],
+  ["Uranus", "Uranus"],
+  ["Neptune", "Neptune"],
+]);
+
+const STAR_DISPLAY_NAME_OVERRIDES = new Map([
+  ["dog star", "Sirius"],
+  ["canicula", "Sirius"],
+  ["aschere", "Sirius"],
+]);
+
 function toDateTimeLocalValue(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
-function getDefaultNightTime() {
-  const date = new Date();
-  date.setHours(22, 0, 0, 0);
-  return toDateTimeLocalValue(date);
+const DEFAULT_TIME = toDateTimeLocalValue(new Date());
+const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
+
+function parseDateTimeLocalValue(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : new Date();
 }
 
-const DEFAULT_TIME = getDefaultNightTime();
+function formatDisplayDateTime(value: string) {
+  const date = parseDateTimeLocalValue(value);
+  return `${date.getFullYear()}년 ${String(date.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}월 ${String(date.getDate()).padStart(2, "0")}일 ${String(
+    date.getHours()
+  ).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(
+    date.getSeconds()
+  ).padStart(2, "0")}`;
+}
+
+function getCalendarDays(monthDate: Date) {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const start = new Date(firstDay);
+  start.setDate(firstDay.getDate() - firstDay.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}
 
 function loadStellariumScript() {
   return new Promise<void>((resolve, reject) => {
@@ -192,13 +255,67 @@ function patchWasmMemoryHelpers(engine: StellariumEngine) {
   }
 }
 
-function setObservationTime(engine: StellariumEngine, value: string) {
-  const timestamp = new Date(value).getTime();
+function addOfficialPlanetDataSources(engine: StellariumEngine) {
+  const dsos = engine.core?.dsos as SweObj | undefined;
+  const planets = engine.core?.planets as SweObj | undefined;
+
+  const baseUrl = "/stellarium/skydata/";
+  dsos?.addDataSource?.({ url: `${baseUrl}dso`, key: "dso" });
+  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/moon`, key: "moon" });
+  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/sun`, key: "sun" });
+  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/moon`, key: "default" });
+}
+
+function updateObserverFrame(engine: StellariumEngine, fast = false) {
+  const observer = engine.observer ?? (engine.core?.observer as SweObj | undefined);
+  if (!observer) return;
+
+  try {
+    engine._observer_update?.(observer.v, fast);
+  } catch {
+    observer.update?.();
+  }
+}
+
+function updateDynamicSkyModules(engine: StellariumEngine) {
+  const dynamicModules = [
+    engine.core?.planets,
+    engine.core?.stars,
+    engine.core?.landscapes,
+    engine.core?.atmosphere,
+  ] as Array<SweObj | undefined>;
+
+  for (const skyModule of dynamicModules) {
+    try {
+      skyModule?.update?.();
+    } catch {
+      // Some modules are render-only in this engine build.
+    }
+  }
+}
+
+function setObservationTime(engine: StellariumEngine, value: string | Date) {
+  const timestamp =
+    value instanceof Date ? value.getTime() : new Date(value).getTime();
   if (!Number.isFinite(timestamp)) return false;
 
-  const mjd = engine.date2MJD?.(timestamp);
-  if (typeof mjd === "number") {
-    engine._core_set_time?.(mjd);
+  // 1. Unix time -> Modified Julian Date for Stellarium's astronomical core.
+  const modifiedJulianDate = engine.date2MJD?.(timestamp);
+  if (typeof modifiedJulianDate === "number") {
+    const observer = engine.core?.observer as
+      | (SweObj & { utc?: number })
+      | undefined;
+
+    if (observer) {
+      observer.utc = modifiedJulianDate;
+    }
+    trySetValue(engine, ["observer.utc"], modifiedJulianDate);
+    engine._core_set_time?.(modifiedJulianDate, 0);
+
+    // 2. Recompute sidereal/precession/observer transforms for the new date.
+    updateObserverFrame(engine, false);
+    updateDynamicSkyModules(engine);
+    engine._core_update?.();
     return true;
   }
 
@@ -206,6 +323,7 @@ function setObservationTime(engine: StellariumEngine, value: string) {
 }
 
 function applyNightSkyDefaults(engine: StellariumEngine) {
+  trySetValue(engine, ["lock"], null);
   trySetValue(engine, ["stars.visible"], true);
   trySetValue(engine, ["planets.visible"], true);
   trySetAllValues(engine, TOGGLE_PATHS.horizontalCoordinates, false);
@@ -220,11 +338,13 @@ function applyNightSkyDefaults(engine: StellariumEngine) {
       "planets.flare_visible",
       "planets.point_halo_visible",
     ],
-    false
+    true
   );
   trySetValue(engine, ["stars.hints_visible"], false);
-  trySetValue(engine, ["stars.labels_visible"], false);
+  trySetValue(engine, ["stars.labels_visible"], true);
+  trySetValue(engine, ["dsos.visible"], false);
   trySetValue(engine, ["planets.hints_visible"], true);
+  trySetValue(engine, ["planets.labels_visible"], true);
   trySetValue(engine, ["planets.hints_mag_offset"], 0);
   trySetValue(engine, ["dsos.hints_visible"], true);
   trySetValue(engine, ["dsos.hints_mag_offset"], -1);
@@ -235,8 +355,32 @@ function applyNightSkyDefaults(engine: StellariumEngine) {
   trySetValue(engine, ["bortle_index"], 1);
 }
 
+function applyDeepSkyMode(engine: StellariumEngine, enabled: boolean) {
+  trySetValue(engine, ["dsos.visible"], enabled);
+  trySetValue(engine, ["dsos.hints_visible"], enabled);
+  trySetValue(engine, ["dsos.hints_mag_offset"], enabled ? 3 : -1);
+  trySetValue(engine, ["display_limit_mag"], enabled ? 9.8 : 6.2);
+  trySetValue(engine, ["star_relative_scale"], enabled ? 1.25 : 1.62);
+  trySetValue(engine, ["star_linear_scale"], enabled ? 0.08 : 0.11);
+}
+
 function normalizeSearchKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return value.toLowerCase().replace(/[^a-z0-9가-힣]+/g, " ").trim();
+}
+
+function getDeepSkySearchCandidates(term: string) {
+  const normalized = term.trim();
+  const match = normalized.match(/^(m|messier|ngc|ic)\s*0*([0-9]+)$/i);
+  if (!match) return [];
+
+  const catalog = match[1].toLowerCase() === "messier" ? "M" : match[1].toUpperCase();
+  const number = String(Number(match[2]));
+  return [
+    `${catalog} ${number}`,
+    `${catalog}${number}`,
+    `NAME ${catalog} ${number}`,
+    `NAME ${catalog}${number}`,
+  ];
 }
 
 function titleCaseName(value: string) {
@@ -245,6 +389,20 @@ function titleCaseName(value: string) {
     .replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
     .replace(/\bHr\b/g, "HR")
     .replace(/\bHd\b/g, "HD");
+}
+
+function getStarDisplayName(star: BrightStar) {
+  for (const name of star.names) {
+    const override = STAR_DISPLAY_NAME_OVERRIDES.get(normalizeSearchKey(name));
+    if (override) return override;
+  }
+
+  const properName =
+    star.names.find(
+      (name) => !/^HR\s/i.test(name) && !/^HD\s/i.test(name) && name !== star.name
+    ) ?? star.name;
+
+  return titleCaseName(properName);
 }
 
 function buildStarDesignations(star: BrightStar) {
@@ -295,13 +453,7 @@ async function loadBrightStarCatalog(
 
     const designations = buildStarDesignations(star);
     const vector = starToIcrfVector(star);
-    const properName =
-      star.names.find((name) => !/^HR\s/i.test(name) && !/^HD\s/i.test(name) && name !== star.name) ??
-      star.name;
-    const featuredName =
-      star.names.find((name) => FEATURED_STAR_NAMES.has(normalizeSearchKey(name))) ??
-      (FEATURED_STAR_NAMES.has(normalizeSearchKey(properName)) ? properName : null);
-    const displayName = featuredName ? titleCaseName(featuredName) : titleCaseName(properName);
+    const displayName = getStarDisplayName(star);
 
     const obj = engine.createObj("star", {
       id: `bsc-${star.hr}`,
@@ -316,7 +468,7 @@ async function loadBrightStarCatalog(
       names: designations,
       name: displayName,
       label: displayName,
-      short_name: featuredName ? displayName : "",
+      short_name: displayName,
       types: ["*"],
     });
 
@@ -324,12 +476,17 @@ async function loadBrightStarCatalog(
     layer.add(obj);
     added += 1;
 
-    const suggestionLabels = new Set<string>();
     for (const name of star.names) {
       const key = normalizeSearchKey(name);
       if (key) searchIndex.set(key, obj);
-      if (key && !/^hd\s/i.test(name)) {
-        suggestionLabels.add(titleCaseName(name.replace(/^NAME\s+/i, "")));
+      if (key && !/^hd\s/i.test(name) && !/^hr\s/i.test(name)) {
+        suggestions.push({
+          key,
+          label: displayName,
+          obj,
+          vector,
+          priority: normalizeSearchKey(displayName) === key ? 12 : 10,
+        });
       }
     }
     searchIndex.set(normalizeSearchKey(String(star.hr)), obj);
@@ -338,19 +495,10 @@ async function loadBrightStarCatalog(
 
     clickTargets.push({
       key: normalizeSearchKey(star.name),
-      label: titleCaseName(properName),
+      label: displayName,
       obj,
       vector,
     });
-
-    for (const label of suggestionLabels) {
-      suggestions.push({
-        key: normalizeSearchKey(label),
-        label,
-        obj,
-        vector,
-      });
-    }
 
     if (added % 500 === 0) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -361,7 +509,15 @@ async function loadBrightStarCatalog(
 }
 
 function findEngineObject(engine: StellariumEngine, term: string) {
-  const candidates = [term, `NAME ${term}`, term.toUpperCase(), term.toLowerCase()];
+  const alias = SOLAR_SYSTEM_ALIASES.get(normalizeSearchKey(term));
+  const candidates = [
+    alias,
+    ...getDeepSkySearchCandidates(term),
+    term,
+    `NAME ${term}`,
+    term.toUpperCase(),
+    term.toLowerCase(),
+  ].filter(Boolean) as string[];
   for (const candidate of candidates) {
     try {
       const target = engine.getObj?.(candidate);
@@ -374,21 +530,20 @@ function findEngineObject(engine: StellariumEngine, term: string) {
   return null;
 }
 
-function addSolarSystemClickTargets(
+function addSolarSystemTargets(
   engine: StellariumEngine,
   searchSuggestions: SearchSuggestion[],
   clickTargets: SearchSuggestion[]
 ) {
-  for (const label of SOLAR_SYSTEM_TARGETS) {
-    const obj = findEngineObject(engine, label);
+  for (const [name, label] of SOLAR_SYSTEM_LABELS) {
+    const obj = findEngineObject(engine, name);
     if (!obj) continue;
 
     const suggestion = {
-      key: normalizeSearchKey(label),
+      key: normalizeSearchKey(name),
       label,
       obj,
-      vector: [],
-      priority: 10,
+      priority: 30,
     };
 
     searchSuggestions.push(suggestion);
@@ -409,7 +564,6 @@ function addFeaturedEngineClickTargets(
       key,
       label,
       obj,
-      vector: [],
       priority: 8,
     });
   }
@@ -421,9 +575,25 @@ function setObserverLocation(
   longitude: number,
   elevation = 0
 ) {
+  const observer = engine.core?.observer as
+    | (SweObj & {
+        latitude?: number;
+        longitude?: number;
+        elevation?: number;
+      })
+    | undefined;
+
+  if (observer) {
+    observer.latitude = latitude * DEG_TO_RAD;
+    observer.longitude = longitude * DEG_TO_RAD;
+    observer.elevation = elevation;
+    updateObserverFrame(engine, false);
+    return true;
+  }
+
   const values = [
-    trySetValue(engine, ["observer.latitude", "observer.lat"], latitude),
-    trySetValue(engine, ["observer.longitude", "observer.lon"], longitude),
+    trySetValue(engine, ["observer.latitude", "observer.lat"], latitude * DEG_TO_RAD),
+    trySetValue(engine, ["observer.longitude", "observer.lon"], longitude * DEG_TO_RAD),
     trySetValue(engine, ["observer.elevation", "observer.altitude"], elevation),
   ];
 
@@ -486,17 +656,65 @@ function labelForObject(
   return fallback;
 }
 
-function selectEngineTarget(engine: StellariumEngine, target: SweObj) {
-  trySetValue(engine, ["selection"], target);
-  trySetValue(engine, ["pointer.visible"], true);
+function getSafeObjectInfo(
+  engine: StellariumEngine,
+  target: SweObj,
+  label: string,
+  vector?: number[]
+) {
+  try {
+    return getObjectInfo(engine, target, label, vector);
+  } catch (error) {
+    console.warn("Could not read object info", error);
+    return null;
+  }
 }
 
-function lockEngineTarget(
+function releaseTracking(engine: StellariumEngine) {
+  trySetAllValues(
+    engine,
+    [
+      "tracking",
+      "selection_tracking",
+      "selection_lock",
+      "observer.tracking",
+    ],
+    false
+  );
+  trySetValue(engine, ["lock"], null);
+}
+
+function centerTargetOnce(
   engine: StellariumEngine,
-  target: SweObj
+  target: SweObj,
+  vector?: number[]
 ) {
-  selectEngineTarget(engine, target);
-  engine.pointAndLock?.(target, 1.8);
+  try {
+    releaseTracking(engine);
+
+    const observer = engine.observer ?? (engine.core?.observer as SweObj | undefined);
+    if (!observer) return;
+
+    const targetVector = getTargetVector(target, observer, vector, {
+      preferFallback: Boolean(vector?.length),
+    });
+    if (!targetVector) return;
+
+    const observedVector = engine.convertFrame?.(
+      observer,
+      "ICRF",
+      "OBSERVED",
+      targetVector
+    );
+    if (!Array.isArray(observedVector) || observedVector.length < 3) return;
+
+    const lookVector = observedVector.slice(0, 3).map(Number);
+    if (!lookVector.every(Number.isFinite)) return;
+
+    engine.lookAt?.(lookVector as [number, number, number], 1.2);
+  } catch (error) {
+    console.warn("Could not center target", error);
+  }
 }
 
 export default function SkyViewer() {
@@ -506,6 +724,8 @@ export default function SkyViewer() {
   const searchSuggestionsRef = useRef<SearchSuggestion[]>([]);
   const clickTargetsRef = useRef<SearchSuggestion[]>([]);
   const selectedTargetRef = useRef<SelectedTarget | null>(null);
+  const simulatedTimeRef = useRef(new Date());
+  const lastTickRef = useRef<number | null>(null);
   const dragStateRef = useRef({
     x: 0,
     y: 0,
@@ -515,7 +735,15 @@ export default function SkyViewer() {
   const [query, setQuery] = useState("Saturn");
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [selectedInfo, setSelectedInfo] = useState<ObjectInfo | null>(null);
-  const [time, setTime] = useState(DEFAULT_TIME);
+  const [timeDraft, setTimeDraft] = useState(DEFAULT_TIME);
+  const [timePickerDraft, setTimePickerDraft] = useState(DEFAULT_TIME);
+  const [isEditingTime, setIsEditingTime] = useState(false);
+  const [isTimePickerOpen, setIsTimePickerOpen] = useState(false);
+  const [timePickerMonth, setTimePickerMonth] = useState(
+    () => parseDateTimeLocalValue(DEFAULT_TIME)
+  );
+  const [timeSpeedIndex, setTimeSpeedIndex] = useState(0);
+  const [deepSkyMode, setDeepSkyMode] = useState(false);
   const [locationQuery, setLocationQuery] = useState(SEOUL.name);
   const [observerLocation, setObserverLocationState] =
     useState<ObserverLocation>({
@@ -533,6 +761,14 @@ export default function SkyViewer() {
     if (status === "error") return "엔진 오류";
     return "불러오는 중";
   }, [status]);
+  const timeDraftDate = useMemo(
+    () => parseDateTimeLocalValue(timePickerDraft),
+    [timePickerDraft]
+  );
+  const calendarDays = useMemo(
+    () => getCalendarDays(timePickerMonth),
+    [timePickerMonth]
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -558,24 +794,26 @@ export default function SkyViewer() {
 
         engineRef.current = engine;
         patchWasmMemoryHelpers(engine);
-        setObservationTime(engine, initialTimeRef.current);
+        addOfficialPlanetDataSources(engine);
         setObserverLocation(
           engine,
           SEOUL.latitude,
           SEOUL.longitude,
           SEOUL.elevation
         );
+        setObservationTime(engine, initialTimeRef.current);
         applyNightSkyDefaults(engine);
+        applyDeepSkyMode(engine, false);
+        addSolarSystemTargets(
+          engine,
+          searchSuggestionsRef.current,
+          clickTargetsRef.current
+        );
         setStatus("ready");
 
         await loadBrightStarCatalog(
           engine,
           catalogSearchRef.current,
-          searchSuggestionsRef.current,
-          clickTargetsRef.current
-        );
-        addSolarSystemClickTargets(
-          engine,
           searchSuggestionsRef.current,
           clickTargetsRef.current
         );
@@ -606,9 +844,29 @@ export default function SkyViewer() {
       return;
     }
 
+    const engine = engineRef.current;
+    const deepSkyCandidates = getDeepSkySearchCandidates(value);
+    const deepSkySuggestions = [];
+    if (engine && deepSkyCandidates.length > 0) {
+      const deepSkyTarget = findEngineObject(engine, value);
+      if (deepSkyTarget) {
+        deepSkySuggestions.push({
+          key,
+          label: deepSkyCandidates[0],
+          obj: deepSkyTarget,
+          priority: 80,
+        });
+      }
+    }
+    const deepSkyOnly = deepSkyCandidates.length > 0;
+
     setSuggestions(
-      searchSuggestionsRef.current
-        .filter((item) => item.key.startsWith(key) || item.key.includes(key))
+      [...deepSkySuggestions, ...searchSuggestionsRef.current]
+        .filter((item) =>
+          deepSkyOnly
+            ? item.key === key || item.key.startsWith(key)
+            : item.key.startsWith(key) || item.key.includes(key)
+        )
         .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
         .slice(0, 8)
     );
@@ -620,8 +878,8 @@ export default function SkyViewer() {
 
     selectedTargetRef.current = { label, obj: target, vector };
     setQuery(label);
-    setSelectedInfo(getObjectInfo(engine, target, label, vector));
-    lockEngineTarget(engine, target);
+    setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
+    centerTargetOnce(engine, target, vector);
     setSuggestions([]);
   }
 
@@ -631,8 +889,7 @@ export default function SkyViewer() {
 
     selectedTargetRef.current = { label, obj: target, vector };
     setQuery(label);
-    setSelectedInfo(getObjectInfo(engine, target, label, vector));
-    selectEngineTarget(engine, target);
+    setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
     setSuggestions([]);
   }
 
@@ -719,14 +976,14 @@ export default function SkyViewer() {
     if (!engine || !term) return;
 
     try {
-      const engineTarget = findEngineObject(engine, term);
       const normalizedTerm = normalizeSearchKey(term);
       const exactSuggestion =
         suggestions.find((item) => item.key === normalizedTerm) ??
         searchSuggestionsRef.current.find((item) => item.key === normalizedTerm);
+      const engineTarget = findEngineObject(engine, term);
       const target =
-        engineTarget ??
         exactSuggestion?.obj ??
+        engineTarget ??
         catalogSearchRef.current.get(normalizeSearchKey(term)) ??
         suggestions[0]?.obj ??
         null;
@@ -734,29 +991,139 @@ export default function SkyViewer() {
         return;
       }
 
+      if (getDeepSkySearchCandidates(term).length > 0) {
+        setDeepSkyMode(true);
+        applyDeepSkyMode(engine, true);
+      }
+
       focusTarget(
         target,
         exactSuggestion?.label ?? suggestions[0]?.label ?? term,
-        engineTarget ? undefined : exactSuggestion?.vector ?? suggestions[0]?.vector
+        exactSuggestion?.obj === target
+          ? exactSuggestion.vector
+          : suggestions[0]?.obj === target
+            ? suggestions[0].vector
+            : undefined
       );
     } catch (error) {
       console.error(error);
     }
   }
 
-  function handleTimeChange(value: string) {
-    setTime(value);
+  const applyObservationTime = useCallback((value: string | Date) => {
     const engine = engineRef.current;
-    if (!engine) return;
+    if (!engine) return false;
 
     if (setObservationTime(engine, value)) {
       const selected = selectedTargetRef.current;
       if (selected) {
         setSelectedInfo(
-          getObjectInfo(engine, selected.obj, selected.label, selected.vector)
+          getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
         );
       }
+      return true;
     }
+
+    return false;
+  }, []);
+
+  useEffect(() => {
+    if (status !== "ready") return;
+
+    let frameId = 0;
+
+    const tick = () => {
+      const speed = TIME_SPEEDS[timeSpeedIndex] ?? TIME_SPEEDS[0];
+      const now = performance.now();
+      const lastTick = lastTickRef.current ?? now;
+      const elapsedSeconds = (now - lastTick) / 1000;
+      lastTickRef.current = now;
+
+      simulatedTimeRef.current = new Date(
+        simulatedTimeRef.current.getTime() +
+          elapsedSeconds * speed.multiplier * 1000
+      );
+
+      applyObservationTime(simulatedTimeRef.current);
+      const nextTime = toDateTimeLocalValue(simulatedTimeRef.current);
+      if (!isEditingTime) {
+        setTimeDraft(nextTime);
+      }
+
+      frameId = window.requestAnimationFrame(tick);
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+
+    return () => {
+      lastTickRef.current = null;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    applyObservationTime,
+    isEditingTime,
+    observerLocation,
+    status,
+    timeSpeedIndex,
+  ]);
+
+  function handleTimeChange(value: string) {
+    setTimePickerDraft(value);
+    setIsEditingTime(true);
+  }
+
+  function openTimePicker() {
+    const draft = parseDateTimeLocalValue(timeDraft);
+    setTimePickerDraft(timeDraft);
+    setTimePickerMonth(new Date(draft.getFullYear(), draft.getMonth(), 1));
+    setIsEditingTime(true);
+    setIsTimePickerOpen(true);
+  }
+
+  function updateDraftDate(nextDate: Date) {
+    const current = parseDateTimeLocalValue(timePickerDraft);
+    const updated = new Date(nextDate);
+    updated.setHours(current.getHours(), current.getMinutes(), 0, 0);
+    handleTimeChange(toDateTimeLocalValue(updated));
+  }
+
+  function updateDraftTime(part: "hour" | "minute", value: string) {
+    const current = parseDateTimeLocalValue(timePickerDraft);
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) return;
+
+    if (part === "hour") {
+      current.setHours(nextValue);
+    } else {
+      current.setMinutes(nextValue);
+    }
+    current.setSeconds(0, 0);
+    handleTimeChange(toDateTimeLocalValue(current));
+  }
+
+  function handleApplyTime() {
+    const selectedTime = new Date(timePickerDraft);
+    if (!Number.isFinite(selectedTime.getTime())) return;
+
+    const appliedTime = toDateTimeLocalValue(selectedTime);
+    simulatedTimeRef.current = selectedTime;
+    lastTickRef.current = performance.now();
+    setIsEditingTime(false);
+    setIsTimePickerOpen(false);
+    setTimeDraft(appliedTime);
+    applyObservationTime(selectedTime);
+  }
+
+  function handleUseCurrentTime() {
+    const now = new Date();
+    simulatedTimeRef.current = now;
+    lastTickRef.current = performance.now();
+    const current = toDateTimeLocalValue(now);
+    setIsEditingTime(false);
+    setIsTimePickerOpen(false);
+    setTimeDraft(current);
+    setTimePickerDraft(current);
+    applyObservationTime(now);
   }
 
   function handleToggle(name: keyof typeof TOGGLE_PATHS) {
@@ -767,6 +1134,15 @@ export default function SkyViewer() {
     if (!engine) return;
 
     trySetAllValues(engine, TOGGLE_PATHS[name], nextValue);
+  }
+
+  function handleDeepSkyModeToggle() {
+    const engine = engineRef.current;
+    const nextValue = !deepSkyMode;
+    setDeepSkyMode(nextValue);
+    if (engine) {
+      applyDeepSkyMode(engine, nextValue);
+    }
   }
 
   return (
@@ -821,15 +1197,139 @@ export default function SkyViewer() {
           </button>
         </form>
 
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span>시간</span>
-          <input
-            type="datetime-local"
-            value={time}
-            onChange={(event) => handleTimeChange(event.target.value)}
-            disabled={status !== "ready"}
-          />
-        </label>
+          <div className={styles.timeField}>
+            <button
+              type="button"
+              className={styles.timeInputButton}
+              onClick={openTimePicker}
+              disabled={status !== "ready"}
+            >
+              {formatDisplayDateTime(timeDraft)}
+            </button>
+            <button
+              type="button"
+              onClick={handleUseCurrentTime}
+              disabled={status !== "ready"}
+            >
+              현재시간
+            </button>
+          </div>
+          {isTimePickerOpen && (
+            <section className={styles.timePicker} aria-label="시간 선택">
+              <div className={styles.timePickerHeader}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTimePickerMonth(
+                      new Date(
+                        timePickerMonth.getFullYear(),
+                        timePickerMonth.getMonth() - 1,
+                        1
+                      )
+                    )
+                  }
+                >
+                  이전
+                </button>
+                <strong>
+                  {timePickerMonth.getFullYear()}년{" "}
+                  {String(timePickerMonth.getMonth() + 1).padStart(2, "0")}월
+                </strong>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTimePickerMonth(
+                      new Date(
+                        timePickerMonth.getFullYear(),
+                        timePickerMonth.getMonth() + 1,
+                        1
+                      )
+                    )
+                  }
+                >
+                  다음
+                </button>
+              </div>
+              <div className={styles.calendarWeekdays}>
+                {WEEKDAY_LABELS.map((label) => (
+                  <span key={label}>{label}</span>
+                ))}
+              </div>
+              <div className={styles.calendarGrid}>
+                {calendarDays.map((date) => {
+                  const isCurrentMonth =
+                    date.getMonth() === timePickerMonth.getMonth();
+                  const isSelected =
+                    date.getFullYear() === timeDraftDate.getFullYear() &&
+                    date.getMonth() === timeDraftDate.getMonth() &&
+                    date.getDate() === timeDraftDate.getDate();
+
+                  return (
+                    <button
+                      key={date.toISOString()}
+                      type="button"
+                      className={[
+                        isCurrentMonth ? "" : styles.outsideMonth,
+                        isSelected ? styles.selectedDay : "",
+                      ].join(" ")}
+                      onClick={() => updateDraftDate(date)}
+                    >
+                      {date.getDate()}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className={styles.timePickerClock}>
+                <select
+                  value={timeDraftDate.getHours()}
+                  onChange={(event) => updateDraftTime("hour", event.target.value)}
+                >
+                  {Array.from({ length: 24 }, (_, hour) => (
+                    <option key={hour} value={hour}>
+                      {String(hour).padStart(2, "0")}시
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={timeDraftDate.getMinutes()}
+                  onChange={(event) =>
+                    updateDraftTime("minute", event.target.value)
+                  }
+                >
+                  {Array.from({ length: 60 }, (_, minute) => (
+                    <option key={minute} value={minute}>
+                      {String(minute).padStart(2, "0")}분
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={styles.timePickerActions}>
+                <button type="button" onClick={handleApplyTime}>
+                  확인
+                </button>
+              </div>
+            </section>
+          )}
+        </div>
+
+        <div className={styles.timeControls} aria-label="시간 흐름 제어">
+          <label className={styles.speedField}>
+            <span>배속</span>
+            <select
+              value={timeSpeedIndex}
+              onChange={(event) => setTimeSpeedIndex(Number(event.target.value))}
+              disabled={status !== "ready"}
+            >
+              {TIME_SPEEDS.map((speed, index) => (
+                <option key={speed.label} value={index}>
+                  {speed.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
       <LocationPicker
         status={status}
@@ -845,11 +1345,12 @@ export default function SkyViewer() {
 
           setObserverLocationState(location);
           setLocationQuery(name ?? "선택한 위치");
+          applyObservationTime(simulatedTimeRef.current);
 
           const selected = selectedTargetRef.current;
           if (selected) {
             setSelectedInfo(
-              getObjectInfo(engine, selected.obj, selected.label, selected.vector)
+              getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
             );
           }
 
@@ -881,6 +1382,14 @@ export default function SkyViewer() {
             aria-pressed={toggles.ground}
           >
             지평 {toggles.ground ? "켜짐" : "꺼짐"}
+          </button>
+          <button
+            type="button"
+            className={deepSkyMode ? styles.active : ""}
+            onClick={handleDeepSkyModeToggle}
+            aria-pressed={deepSkyMode}
+          >
+            딥스카이 {deepSkyMode ? "켜짐" : "꺼짐"}
           </button>
         </div>
       </section>
