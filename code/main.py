@@ -1,22 +1,83 @@
-import os
+from config import EnvironmentConfig
 from data_loader import *
 from calculator import run_pipeline
+from datetime import datetime
+import time
+import numpy as np
+
+# main.py 내부 get_time_input 함수 수정
+
+def get_time_input():
+    """시간을 현재 시간으로 할지, 날짜만 입력할지 사용자에게 묻는 함수"""
+    while True:
+        choice = input("현재 날짜/시간을 사용하시겠습니까? (Y: 현재, N: 날짜 직접 입력): ").strip().upper()
+        
+        if choice == 'Y':
+            # 현재 시간 반환
+            return datetime.now().strftime("%Y-%m-%d %H:00")
+            
+        elif choice == 'N':
+            # 시간은 묻지 않고 날짜만 묻기
+            custom_date = input("원하는 날짜를 입력하세요 (형식: YYYY-MM-DD HH:MM) [예: 2026-05-18 22:00]: ").strip()
+            if len(custom_date) == 16 and custom_date.count('-') == 2 and custom_date.count(':') == 1:
+                print(f"-> 야간 광공해 기준 시간인 [{custom_date}] 기준으로 분석합니다.\n")
+                return custom_date
+            else:
+                print("[오류] 입력 형식이 올바르지 않습니다. 'YYYY-MM-DD HH:MM' 형식으로 입력해주세요.\n")
+        else:
+            print("Y 또는 N을 입력해주세요.\n")
 
 def main():
-    print('main.py started.')
-    time_input = input("Enter simulation time (YYYY-MM-DD HH:MM): ")
-    observer_coordinates = tuple(map(float, input("Enter observer coordinates (latitude, longitude): ").split(",")))
-    observer_angles = tuple(map(float, input("Enter observer angles (zenith, azimuth): ").split(",")))
-    moon_angles = tuple(map(float, input("Enter moon angles (zenith, azimuth): ").split(",")))
+    print('\n--- main.py started. ---')
+    
+    # [핵심 수정 1] 관측 좌표 입력 스킵 방지 및 예외 처리
+    while True:
+        coord_input = input("Enter observer coordinates (latitude, longitude) [예: 37.5, 126.9]: ").strip()
+        
+        # 버퍼 문제로 빈 값이 들어오면 무시하고 다시 입력 대기
+        if not coord_input:
+            continue
+            
+        try:
+            observer_coordinates = tuple(map(float, coord_input.split(",")))
+            if len(observer_coordinates) != 2:
+                print("[오류] 위도와 경도 2개의 값을 콤마(,)로 구분해서 입력해야 합니다.\n")
+                continue
+            break # 정상 입력 시 루프 탈출
+        except ValueError:
+            print(f"[오류] 숫자로 변환할 수 없는 형식입니다. 입력값: '{coord_input}'")
+            print("올바른 예시와 같이 입력해주세요. (예: 37.5, 126.9)\n")
 
-    aod, cloud_fraction, cloud_base_h, seeing, moonlight = environment_query(time_input, *observer_coordinates)
+    # [핵심 수정 2] 관측 각도 입력 스킵 방지 및 예외 처리
+    while True:
+        angle_input = input("Enter observer angles (zenith, azimuth) [예: 0.0, 180.0]: ").strip()
+        
+        if not angle_input:
+            continue
+            
+        try:
+            observer_angles = tuple(map(float, angle_input.split(",")))
+            if len(observer_angles) != 2:
+                print("[오류] 천정각과 방위각 2개의 값을 콤마(,)로 구분해서 입력해야 합니다.\n")
+                continue
+            break # 정상 입력 시 루프 탈출
+        except ValueError:
+            print(f"[오류] 숫자로 변환할 수 없는 형식입니다. 입력값: '{angle_input}'")
+            print("올바른 예시와 같이 입력해주세요. (예: 0.0, 180.0)\n")
+
+    # 시간 설정 함수 호출
+    time_input = get_time_input()
+    print(f"\n[알림] 설정된 관측 시간: {time_input}\n")
+
+    # 환경 데이터 쿼리
+    aod, cloud_fraction, cloud_base_h, seeing, moonlight, moon_angle = environment_query(time_input, *observer_coordinates)
 
     H5_FILE_PATH = r"C:\Users\yun09\Desktop\제곽\2026\1.연구\2.전람회\전람회\전람회\광공해\VNP46A3.A2026001.h30v05.002.2026041165901.h5"  # 위성 데이터
     DEM_IMG_PATH = r"C:\Users\yun09\Desktop\제곽\2026\1.연구\2.전람회\전람회\전람회\한반도\한반도90m_GRS80.img"     # 지형 데이터
 
     # 광원 데이터 로딩
     print("satellite data loading...")
-    pixel_data = load_pixel_data_from_h5(H5_FILE_PATH)
+    pixel_data = load_pixel_data_from_h5(H5_FILE_PATH, observer_coordinates, max_radius_km=100.0)  # 관측자 주변 100km 반경 데이터만 로딩
     
     if not pixel_data:
         print("nothing loaded. check the file path and data format.")
@@ -25,20 +86,40 @@ def main():
     # 물리 엔진 가동
     print("calculating...")
     
-    final_radiance = run_pipeline(
-        AOD=aod,                                    # 에어로졸 광학 두께
-        cloud_fraction=cloud_fraction,              # 운량 (0=맑음)
-        cloud_base_h=cloud_base_h,                  # 구름 밑면 고도 (km)
-        seeing=seeing,                              # 시야 깊이
-        moonlight=moonlight,                        # 월광
-        observer_coordinates=observer_coordinates,  # 관측자 위도, 경도
-        observer_angles=observer_angles,            # 관측 천정각, 방위각
-        moon_angles=moon_angles,                    # 달 천정각, 방위각
-        pixel_data=pixel_data,
-        dem_path=DEM_IMG_PATH
+    my_config = EnvironmentConfig(
+        aod=aod,
+        cloud_fraction=cloud_fraction,
+        cloud_base_h=cloud_base_h,
+        seeing=seeing,
+        moonlight=moonlight
     )
 
+    final_radiance = run_pipeline(
+        observer_coordinates=observer_coordinates,    # 관측자 위도, 경도
+        observer_angles=observer_angles,            # 관측 천정각, 방위각
+        moon_angles=moon_angle,                     # 달 천정각, 방위각
+        pixel_data=pixel_data,
+        dem_path=DEM_IMG_PATH,
+        config=my_config                             # 최적화 대상 변수들을 포함한 환경 설정 객체
+    )
+    if final_radiance <= 0:
+        print("simulation completed, but radiance is zero or negative. Check input angles/data.")
+        return
+
+    mag = 12.59 - 2.5 * np.log10(final_radiance * 683)
     print("simulation completed.")
+    print(f"Predicted magnitude: {mag:.2f}")
 
 if __name__ == "__main__":
-    main()
+    while True:
+        Q = input("프로그램을 실행하시겠습니까? (Y/N): ").strip().upper()
+        
+        if Q == 'Y':
+            run_time = time.time()
+            main()  
+            print(f"Total execution time: {time.time() - run_time:.2f} seconds")
+        elif Q == 'N':
+            print("프로그램을 종료합니다.")
+            break
+        else:
+            print("Y 또는 N을 입력해주세요.\n")
