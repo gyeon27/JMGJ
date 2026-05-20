@@ -288,7 +288,7 @@ class LightPollutionModel:
             integrands = dir_b_vals * (np.cos(z_0h_vals)**2) * t_total_vals / (h_array**2) * gamma_scatter_vals
             integrands[~valid_mask] = 0.0 
             
-            res_integral = np.trapezoid(integrands, x=h_array)
+            res_integral = np.trapz(integrands, x=h_array)
             i_city = (self.cfg.pixel_area * I_0 / cos_z) * res_integral
 
         C = getattr(self.cfg, 'cloud_fraction', 0.0)
@@ -337,7 +337,7 @@ class LightPollutionModel:
         t_h_to_obs_vals = self.transmittance(h_array, z)
         
         integrands = gamma_ml_vals * t_moon_to_h_vals * t_h_to_obs_vals
-        sumation = np.trapezoid(integrands, x=h_array)
+        sumation = np.trapz(integrands, x=h_array)
         
         return (i_moon_base / cos_z) * sumation
     def calculate_background(self) -> float:
@@ -422,3 +422,4 @@ def run_pipeline(observer_coordinates, observer_angles, moon_angles, pixel_data,
     total = model.calculate_total_radiance(I_pixel, I_ml, I_bg)
     
     return total
+
