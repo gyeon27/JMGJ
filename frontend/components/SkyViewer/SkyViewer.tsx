@@ -42,7 +42,9 @@ const SEOUL = {
   elevation: 0,
 };
 
-const MAX_RENDERED_STAR_MAG = 5.8;
+const MAX_RENDERED_STAR_MAG = 4.85;
+const SKY_TIME_UPDATE_INTERVAL_MS = 100;
+const TIME_DISPLAY_UPDATE_INTERVAL_MS = 250;
 const DEG_TO_RAD = Math.PI / 180;
 const FEATURED_STAR_NAMES = new Set(
   [
@@ -79,15 +81,28 @@ const FEATURED_STAR_NAMES = new Set(
 
 const TOGGLE_PATHS = {
   horizontalCoordinates: ["lines.azimuthal.visible"],
+  constellationLines: [
+    "constellations.lines_visible",
+    "constellations.visible",
+    "skycultures.lines_visible",
+    "skycultures.constellation_lines_visible",
+    "skycultures.constellations_lines_visible",
+    "skycultures.constellations_visible",
+    "skycultures.visible",
+    "skycultures.enabled",
+    "lines.constellations.visible",
+    "lines.constellation.visible",
+  ],
   atmosphere: ["atmosphere.visible"],
   ground: ["landscapes.visible"],
 };
 
 const TIME_SPEEDS = [
   { label: "1x", multiplier: 1 },
-  { label: "2x", multiplier: 2 },
-  { label: "3x", multiplier: 3 },
-  { label: "4x", multiplier: 4 },
+  { label: "5x", multiplier: 5 },
+  { label: "10x", multiplier: 10 },
+  { label: "100x", multiplier: 100 },
+  { label: "1000x", multiplier: 1000 },
 ];
 
 const SOLAR_SYSTEM_ALIASES = new Map(
@@ -119,10 +134,306 @@ const SOLAR_SYSTEM_LABELS = new Map([
 ]);
 
 const STAR_DISPLAY_NAME_OVERRIDES = new Map([
+  ["hr 2061", "Betelgeuse"],
+  ["58alp ori", "Betelgeuse"],
   ["dog star", "Sirius"],
   ["canicula", "Sirius"],
   ["aschere", "Sirius"],
 ]);
+
+type ToolbarIconName =
+  | "constellation"
+  | "horizontal"
+  | "atmosphere"
+  | "ground"
+  | "deepSky";
+
+type HipStarCache = {
+  stars: Array<{
+    hip: number;
+    ra: number;
+    dec: number;
+    vmag?: number;
+  }>;
+};
+
+type SkycultureConstellation = {
+  id: string;
+  lines?: unknown[][];
+  iau?: string;
+  common_name?: {
+    english?: string;
+    native?: string;
+  };
+};
+
+type SkycultureIndex = {
+  constellations?: SkycultureConstellation[];
+};
+
+type GeoJsonFeatureCollection = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: {
+      stroke: string;
+      "stroke-opacity": number;
+      "stroke-width": number;
+      "stroke-glow"?: boolean;
+      fill: string;
+      "fill-opacity": number;
+      title?: string;
+      "text-anchor"?: string;
+      "text-size"?: number;
+      "text-offset"?: number[];
+      "constellation-id"?: string;
+    };
+    geometry:
+      | {
+          type: "LineString";
+          coordinates: number[][];
+        }
+      | {
+          type: "Point";
+          coordinates: number[];
+        };
+  }>;
+};
+
+const BAYER_GREEK_SYMBOLS = new Map([
+  ["Alp", "α"],
+  ["Bet", "β"],
+  ["Gam", "γ"],
+  ["Del", "δ"],
+  ["Eps", "ε"],
+  ["Zet", "ζ"],
+  ["Eta", "η"],
+  ["The", "θ"],
+  ["Iot", "ι"],
+  ["Kap", "κ"],
+  ["Lam", "λ"],
+  ["Mu", "μ"],
+  ["Nu", "ν"],
+  ["Xi", "ξ"],
+  ["Omi", "ο"],
+  ["Pi", "π"],
+  ["Rho", "ρ"],
+  ["Sig", "σ"],
+  ["Tau", "τ"],
+  ["Ups", "υ"],
+  ["Phi", "φ"],
+  ["Chi", "χ"],
+  ["Psi", "ψ"],
+  ["Ome", "ω"],
+]);
+
+function parseBayerDesignation(value: string) {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  const match = normalized.match(/^(?:\d+)?([A-Z][a-z]{1,2})(\d*)\s*([A-Z][a-z]{2})$/);
+  if (!match) return null;
+
+  const symbol = BAYER_GREEK_SYMBOLS.get(match[1]);
+  if (!symbol) return null;
+
+  return `${symbol}${match[2] ?? ""} ${match[3]}`;
+}
+
+function getBayerDesignations(star: BrightStar) {
+  const designations = new Set<string>();
+  const candidates = [star.name, ...star.names];
+
+  for (const candidate of candidates) {
+    const bayer = parseBayerDesignation(candidate);
+    if (bayer) designations.add(bayer);
+  }
+
+  return [...designations];
+}
+
+function ToolbarIcon({ name }: { name: ToolbarIconName }) {
+  if (name === "constellation") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <path d="M9 36 17 12 32 18 39 35 23 39Z" />
+        <circle cx="9" cy="36" r="4" />
+        <circle cx="17" cy="12" r="4" />
+        <circle cx="32" cy="18" r="4" />
+        <circle cx="39" cy="35" r="4" />
+        <circle cx="23" cy="39" r="4" />
+      </svg>
+    );
+  }
+
+  if (name === "horizontal") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="18" />
+        <path d="M6 24h36M24 6c5 5 7.5 11 7.5 18S29 37 24 42M24 6c-5 5-7.5 11-7.5 18S19 37 24 42M10.5 14.5h27M10.5 33.5h27" />
+      </svg>
+    );
+  }
+
+  if (name === "atmosphere") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <path d="M14 34h23a8 8 0 0 0 0-16 12 12 0 0 0-23-3 9.5 9.5 0 0 0 0 19Z" />
+      </svg>
+    );
+  }
+
+  if (name === "ground") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <path d="M5 35c7-10 13-13 19-8 5-8 12-10 19 8" />
+        <path d="M7 36h34" />
+        <circle cx="34" cy="15" r="5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M39 14c-5-7-17-8-25-1 8-2 13 0 16 4-7-3-17 0-21 9 6-5 13-5 18-2-7 0-14 6-14 15 4-6 10-9 17-8 7 1 12-3 14-9-4 4-8 5-13 4 6-2 9-6 8-12Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="5.5" width="16" height="14" rx="2" />
+      <path d="M8 3.5v4M16 3.5v4M4 10h16" />
+    </svg>
+  );
+}
+
+async function loadWesternSkyculture(): Promise<SkycultureIndex> {
+  const skycultureResponse = await fetch("/stellarium/skycultures/western/index.json");
+  if (!skycultureResponse.ok) {
+    throw new Error("Cannot load western skyculture");
+  }
+  return (await skycultureResponse.json()) as SkycultureIndex;
+}
+
+async function loadConstellationHipStarCache(): Promise<HipStarCache> {
+  const hipResponse = await fetch("/stellarium/skycultures/western/hip-stars.json");
+  if (!hipResponse.ok) {
+    throw new Error("Cannot load constellation HIP stars");
+  }
+  return (await hipResponse.json()) as HipStarCache;
+}
+
+function sphericalToVector(coordinate: number[]) {
+  const ra = coordinate[0] * DEG_TO_RAD;
+  const dec = coordinate[1] * DEG_TO_RAD;
+  const cosDec = Math.cos(dec);
+
+  return [Math.cos(ra) * cosDec, Math.sin(ra) * cosDec, Math.sin(dec)];
+}
+
+function getAverageSkyCoordinate(coordinates: number[][]) {
+  if (!coordinates.length) return null;
+
+  const sum = coordinates.reduce(
+    (acc, coordinate) => {
+      const vector = sphericalToVector(coordinate);
+      acc[0] += vector[0];
+      acc[1] += vector[1];
+      acc[2] += vector[2];
+      return acc;
+    },
+    [0, 0, 0]
+  );
+  const length = Math.hypot(sum[0], sum[1], sum[2]);
+  if (!length) return null;
+
+  const x = sum[0] / length;
+  const y = sum[1] / length;
+  const z = sum[2] / length;
+  const ra = (Math.atan2(y, x) / DEG_TO_RAD + 360) % 360;
+  const dec = Math.asin(z) / DEG_TO_RAD;
+
+  return [ra, dec];
+}
+
+function getConstellationLabel(constellation: SkycultureConstellation) {
+  return (
+    constellation.common_name?.english ??
+    constellation.common_name?.native ??
+    constellation.iau ??
+    constellation.id.replace(/^CON\s+western\s+/, "")
+  );
+}
+
+async function loadWesternConstellationGeoJson(): Promise<GeoJsonFeatureCollection> {
+  const [skyculture, hipCache] = await Promise.all([
+    loadWesternSkyculture(),
+    loadConstellationHipStarCache(),
+  ]);
+  const hipCoordinates = new Map(
+    hipCache.stars.map((star) => [star.hip, [star.ra, star.dec]])
+  );
+  const features: GeoJsonFeatureCollection["features"] = [];
+
+  for (const constellation of skyculture.constellations ?? []) {
+    const labelCoordinates: number[][] = [];
+
+    for (const line of constellation.lines ?? []) {
+      const coordinates = line
+        .filter((value): value is number => typeof value === "number")
+        .map((hip) => hipCoordinates.get(hip))
+        .filter((coordinate): coordinate is number[] => Boolean(coordinate));
+
+      if (coordinates.length < 2) continue;
+      labelCoordinates.push(...coordinates);
+
+      features.push({
+        type: "Feature",
+        properties: {
+          stroke: "#a6ffff",
+          "stroke-opacity": 0.55,
+          "stroke-width": 1.2,
+          "stroke-glow": false,
+          fill: "#000000",
+          "fill-opacity": 0,
+          "constellation-id": constellation.id,
+        },
+        geometry: {
+          type: "LineString",
+          coordinates,
+        },
+      });
+    }
+
+    const labelCoordinate = getAverageSkyCoordinate(labelCoordinates);
+    if (!labelCoordinate) continue;
+
+    features.push({
+      type: "Feature",
+      properties: {
+        stroke: "#69a7ff",
+        "stroke-opacity": 0.95,
+        "stroke-width": 0,
+        fill: "#000000",
+        "fill-opacity": 0,
+        title: getConstellationLabel(constellation),
+        "text-anchor": "center",
+        "text-size": 19,
+        "text-offset": [0, 0],
+        "constellation-id": constellation.id,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: labelCoordinate,
+      },
+    });
+  }
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
 
 function toDateTimeLocalValue(date: Date) {
   const year = date.getFullYear();
@@ -255,15 +566,118 @@ function patchWasmMemoryHelpers(engine: StellariumEngine) {
   }
 }
 
+function getEngineModule(engine: StellariumEngine, name: string) {
+  return (
+    (engine.core?.[name] as SweObj | undefined) ??
+    engine.getModule?.(name) ??
+    engine.getModule?.(`core.${name}`) ??
+    undefined
+  );
+}
+
+function addDataSource(module: SweObj | undefined, url: string, key: string) {
+  try {
+    module?.addDataSource?.({ url, key });
+  } catch (error) {
+    console.warn(`Could not add Stellarium data source: ${key}`, error);
+  }
+}
+
 function addOfficialPlanetDataSources(engine: StellariumEngine) {
   const dsos = engine.core?.dsos as SweObj | undefined;
   const planets = engine.core?.planets as SweObj | undefined;
+  const stars = getEngineModule(engine, "stars");
+  const skycultures = getEngineModule(engine, "skycultures");
+  const constellations = getEngineModule(engine, "constellations");
 
   const baseUrl = "/stellarium/skydata/";
-  dsos?.addDataSource?.({ url: `${baseUrl}dso`, key: "dso" });
-  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/moon`, key: "moon" });
-  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/sun`, key: "sun" });
-  planets?.addDataSource?.({ url: `${baseUrl}surveys/sso/moon`, key: "default" });
+  const skycultureId = "western";
+  const skycultureUrl = "/stellarium/skycultures/western";
+  addDataSource(dsos, `${baseUrl}dso`, "dso");
+  addDataSource(
+    stars,
+    "http://stelladata.noctua-software.com/surveys/stars",
+    "stars"
+  );
+  addDataSource(planets, `${baseUrl}surveys/sso/moon`, "moon");
+  addDataSource(planets, `${baseUrl}surveys/sso/sun`, "sun");
+  addDataSource(skycultures, skycultureUrl, skycultureId);
+  trySetValue(engine, ["skycultures.current"], skycultureId);
+  trySetValue(engine, ["skycultures.current_id"], skycultureId);
+  trySetValue(engine, ["skycultures.current_skyculture"], skycultureId);
+  trySetValue(engine, ["skycultures.skyculture"], skycultureId);
+  trySetValue(engine, ["constellations.current"], skycultureId);
+  trySetValue(engine, ["constellations.current_id"], skycultureId);
+  skycultures?.update?.();
+  constellations?.update?.();
+
+  const planetarySurveys = [
+    "mercury",
+    "venus",
+    "mars",
+    "jupiter",
+    "saturn",
+    "uranus",
+    "neptune",
+  ];
+
+  for (const planet of planetarySurveys) {
+    addDataSource(planets, `https://data.stellarium.org/surveys/${planet}`, planet);
+  }
+}
+
+async function createConstellationLineObjects(engine: StellariumEngine) {
+  const data = await loadWesternConstellationGeoJson();
+  const objects: SweObj[] = [];
+  const groupedFeatures = new Map<string, GeoJsonFeatureCollection["features"]>();
+
+  for (const feature of data.features) {
+    const constellationId = feature.properties["constellation-id"] ?? "misc";
+    const group = groupedFeatures.get(constellationId) ?? [];
+    group.push(feature);
+    groupedFeatures.set(constellationId, group);
+  }
+
+  // Use the engine object's JSON property setter. The JS helper `setData`
+  // only handles polygons, while the native C parser supports LineString.
+  for (const features of groupedFeatures.values()) {
+    const geoJson = engine.createObj?.("geojson", {});
+    if (!geoJson) continue;
+
+    geoJson.data = {
+      type: "FeatureCollection",
+      features,
+    };
+    geoJson.z = 16;
+    objects.push(geoJson);
+  }
+
+  return objects;
+}
+
+function setConstellationLineObjectVisible(
+  engine: StellariumEngine,
+  lineObjects: SweObj[],
+  visible: boolean,
+  addedRef: { current: boolean }
+) {
+  const core = engine.core as SweObj | undefined;
+  if (!core || lineObjects.length === 0) return;
+
+  if (visible && !addedRef.current) {
+    for (const lineObject of lineObjects) {
+      core.add?.(lineObject);
+    }
+    addedRef.current = true;
+  } else if (!visible && addedRef.current) {
+    for (const lineObject of lineObjects) {
+      core.remove?.(lineObject);
+    }
+    addedRef.current = false;
+  }
+
+  core.update?.();
+  engine._core_update?.();
 }
 
 function updateObserverFrame(engine: StellariumEngine, fast = false) {
@@ -281,6 +695,8 @@ function updateDynamicSkyModules(engine: StellariumEngine) {
   const dynamicModules = [
     engine.core?.planets,
     engine.core?.stars,
+    getEngineModule(engine, "skycultures"),
+    getEngineModule(engine, "constellations"),
     engine.core?.landscapes,
     engine.core?.atmosphere,
   ] as Array<SweObj | undefined>;
@@ -327,6 +743,11 @@ function applyNightSkyDefaults(engine: StellariumEngine) {
   trySetValue(engine, ["stars.visible"], true);
   trySetValue(engine, ["planets.visible"], true);
   trySetAllValues(engine, TOGGLE_PATHS.horizontalCoordinates, false);
+  trySetAllValues(engine, TOGGLE_PATHS.constellationLines, false);
+  trySetValue(engine, ["constellations.show_only_pointed"], false);
+  trySetValue(engine, ["constellations.labels_visible"], false);
+  trySetValue(engine, ["constellations.images_visible"], false);
+  trySetValue(engine, ["constellations.bounds_visible"], false);
   trySetValue(engine, TOGGLE_PATHS.atmosphere, false);
   trySetValue(engine, TOGGLE_PATHS.ground, true);
   trySetValue(engine, ["planets.scale_moon"], false);
@@ -340,7 +761,8 @@ function applyNightSkyDefaults(engine: StellariumEngine) {
     ],
     true
   );
-  trySetValue(engine, ["stars.hints_visible"], false);
+  trySetValue(engine, ["stars.hints_visible"], true);
+  trySetValue(engine, ["stars.hints_mag_offset"], 2.6);
   trySetValue(engine, ["stars.labels_visible"], true);
   trySetValue(engine, ["dsos.visible"], false);
   trySetValue(engine, ["planets.hints_visible"], true);
@@ -349,7 +771,7 @@ function applyNightSkyDefaults(engine: StellariumEngine) {
   trySetValue(engine, ["dsos.hints_visible"], true);
   trySetValue(engine, ["dsos.hints_mag_offset"], -1);
   trySetValue(engine, ["pointer.visible"], true);
-  trySetValue(engine, ["display_limit_mag"], 6.2);
+  trySetValue(engine, ["display_limit_mag"], 5.5);
   trySetValue(engine, ["star_relative_scale"], 1.62);
   trySetValue(engine, ["star_linear_scale"], 0.11);
   trySetValue(engine, ["bortle_index"], 1);
@@ -359,7 +781,7 @@ function applyDeepSkyMode(engine: StellariumEngine, enabled: boolean) {
   trySetValue(engine, ["dsos.visible"], enabled);
   trySetValue(engine, ["dsos.hints_visible"], enabled);
   trySetValue(engine, ["dsos.hints_mag_offset"], enabled ? 3 : -1);
-  trySetValue(engine, ["display_limit_mag"], enabled ? 9.8 : 6.2);
+  trySetValue(engine, ["display_limit_mag"], enabled ? 8.5 : 5.5);
   trySetValue(engine, ["star_relative_scale"], enabled ? 1.25 : 1.62);
   trySetValue(engine, ["star_linear_scale"], enabled ? 0.08 : 0.11);
 }
@@ -391,30 +813,51 @@ function titleCaseName(value: string) {
     .replace(/\bHd\b/g, "HD");
 }
 
-function getStarDisplayName(star: BrightStar) {
-  for (const name of star.names) {
+function getPreferredStarDisplayName(names: string[], fallback: string) {
+  for (const name of names) {
     const override = STAR_DISPLAY_NAME_OVERRIDES.get(normalizeSearchKey(name));
     if (override) return override;
   }
 
   const properName =
-    star.names.find(
-      (name) => !/^HR\s/i.test(name) && !/^HD\s/i.test(name) && name !== star.name
-    ) ?? star.name;
+    names.find(
+      (name) => !/^HR\s/i.test(name) && !/^HD\s/i.test(name) && name !== fallback
+    ) ?? fallback;
 
-  return titleCaseName(properName);
+  return titleCaseName(properName.replace(/^NAME\s+/i, ""));
+}
+
+function getStarDisplayName(star: BrightStar) {
+  return getPreferredStarDisplayName(star.names, star.name);
 }
 
 function buildStarDesignations(star: BrightStar) {
   const names = new Set<string>();
-  for (const name of star.names) {
-    const normalized = name.trim();
-    if (!normalized) continue;
-    names.add(normalized);
-    if (!/^HR\s/i.test(normalized) && !/^HD\s/i.test(normalized)) {
-      names.add(`NAME ${titleCaseName(normalized)}`);
+  const displayName = getStarDisplayName(star);
+  const bayerDesignations = getBayerDesignations(star);
+  const isFeatured =
+    FEATURED_STAR_NAMES.has(normalizeSearchKey(displayName)) ||
+    star.names.some((name) => FEATURED_STAR_NAMES.has(normalizeSearchKey(name)));
+
+  for (const bayerDesignation of bayerDesignations) {
+    names.add(bayerDesignation);
+    names.add(`NAME ${bayerDesignation}`);
+  }
+
+  if (isFeatured) {
+    names.add(displayName);
+    names.add(`NAME ${displayName}`);
+
+    for (const name of star.names) {
+      const normalized = name.trim();
+      if (!normalized) continue;
+      names.add(normalized);
+      if (!/^HR\s/i.test(normalized) && !/^HD\s/i.test(normalized)) {
+        names.add(`NAME ${titleCaseName(normalized)}`);
+      }
     }
   }
+
   return [...names];
 }
 
@@ -638,19 +1081,20 @@ function labelForObject(
   const matched = clickTargets.find((item) => item.obj.v === target.v);
   if (matched?.label) return matched.label;
 
-  if (target.name) return titleCaseName(target.name);
-  if (target.id) return titleCaseName(target.id.replace(/^NAME\s+/i, ""));
-
   try {
     const designations = target.designations?.() ?? [];
-    const name =
-      designations.find((item) => /^NAME\s/i.test(item)) ??
-      designations.find((item) => !/^HR\s/i.test(item) && !/^HD\s/i.test(item)) ??
-      designations[0];
-
-    if (name) return titleCaseName(name.replace(/^NAME\s+/i, ""));
+    if (designations.length > 0) {
+      return getPreferredStarDisplayName(designations, fallback);
+    }
   } catch {
     // Some engine-native objects do not expose designations safely.
+  }
+
+  if (target.name) {
+    return getPreferredStarDisplayName([target.name], target.name);
+  }
+  if (target.id) {
+    return getPreferredStarDisplayName([target.id], target.id);
   }
 
   return fallback;
@@ -684,13 +1128,17 @@ function releaseTracking(engine: StellariumEngine) {
   trySetValue(engine, ["lock"], null);
 }
 
-function centerTargetOnce(
+function centerTarget(
   engine: StellariumEngine,
   target: SweObj,
-  vector?: number[]
+  vector?: number[],
+  duration = 1.2,
+  release = true
 ) {
   try {
-    releaseTracking(engine);
+    if (release) {
+      releaseTracking(engine);
+    }
 
     const observer = engine.observer ?? (engine.core?.observer as SweObj | undefined);
     if (!observer) return;
@@ -711,10 +1159,18 @@ function centerTargetOnce(
     const lookVector = observedVector.slice(0, 3).map(Number);
     if (!lookVector.every(Number.isFinite)) return;
 
-    engine.lookAt?.(lookVector as [number, number, number], 1.2);
+    engine.lookAt?.(lookVector as [number, number, number], duration);
   } catch (error) {
     console.warn("Could not center target", error);
   }
+}
+
+function centerTargetOnce(
+  engine: StellariumEngine,
+  target: SweObj,
+  vector?: number[]
+) {
+  centerTarget(engine, target, vector, 1.2, true);
 }
 
 export default function SkyViewer() {
@@ -724,8 +1180,14 @@ export default function SkyViewer() {
   const searchSuggestionsRef = useRef<SearchSuggestion[]>([]);
   const clickTargetsRef = useRef<SearchSuggestion[]>([]);
   const selectedTargetRef = useRef<SelectedTarget | null>(null);
+  const trackingTargetRef = useRef<SelectedTarget | null>(null);
+  const trackingActivationTimeoutRef = useRef<number | null>(null);
+  const constellationLineObjectsRef = useRef<SweObj[]>([]);
+  const isConstellationLineObjectAddedRef = useRef(false);
   const simulatedTimeRef = useRef(new Date());
   const lastTickRef = useRef<number | null>(null);
+  const lastSkyUpdateRef = useRef<number | null>(null);
+  const lastTimeDisplayUpdateRef = useRef<number | null>(null);
   const dragStateRef = useRef({
     x: 0,
     y: 0,
@@ -739,6 +1201,7 @@ export default function SkyViewer() {
   const [timePickerDraft, setTimePickerDraft] = useState(DEFAULT_TIME);
   const [isEditingTime, setIsEditingTime] = useState(false);
   const [isTimePickerOpen, setIsTimePickerOpen] = useState(false);
+  const [isTimePaused, setIsTimePaused] = useState(false);
   const [timePickerMonth, setTimePickerMonth] = useState(
     () => parseDateTimeLocalValue(DEFAULT_TIME)
   );
@@ -752,6 +1215,7 @@ export default function SkyViewer() {
     });
   const [toggles, setToggles] = useState({
     horizontalCoordinates: false,
+    constellationLines: false,
     atmosphere: false,
     ground: true,
   });
@@ -787,6 +1251,7 @@ export default function SkyViewer() {
 
         const engine = await createEngine({
           canvasElement: canvas,
+          res: ["http://stelladata.noctua-software.com/surveys/stars/info.json"],
           wasmFile: "/stellarium/stellarium-web-engine.wasm",
         });
 
@@ -832,6 +1297,12 @@ export default function SkyViewer() {
     return () => {
       disposed = true;
       engineRef.current = null;
+      constellationLineObjectsRef.current = [];
+      isConstellationLineObjectAddedRef.current = false;
+      if (trackingActivationTimeoutRef.current !== null) {
+        window.clearTimeout(trackingActivationTimeoutRef.current);
+        trackingActivationTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -876,10 +1347,19 @@ export default function SkyViewer() {
     const engine = engineRef.current;
     if (!engine) return;
 
-    selectedTargetRef.current = { label, obj: target, vector };
+    const nextTarget = { label, obj: target, vector };
+    selectedTargetRef.current = nextTarget;
+    trackingTargetRef.current = null;
+    if (trackingActivationTimeoutRef.current !== null) {
+      window.clearTimeout(trackingActivationTimeoutRef.current);
+    }
     setQuery(label);
     setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
     centerTargetOnce(engine, target, vector);
+    trackingActivationTimeoutRef.current = window.setTimeout(() => {
+      trackingTargetRef.current = nextTarget;
+      trackingActivationTimeoutRef.current = null;
+    }, 1250);
     setSuggestions([]);
   }
 
@@ -888,9 +1368,18 @@ export default function SkyViewer() {
     if (!engine) return;
 
     selectedTargetRef.current = { label, obj: target, vector };
+    cancelTargetTracking();
     setQuery(label);
     setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
     setSuggestions([]);
+  }
+
+  function cancelTargetTracking() {
+    trackingTargetRef.current = null;
+    if (trackingActivationTimeoutRef.current !== null) {
+      window.clearTimeout(trackingActivationTimeoutRef.current);
+      trackingActivationTimeoutRef.current = null;
+    }
   }
 
   function handleCanvasMouseDown(event: MouseEvent<HTMLCanvasElement>) {
@@ -900,6 +1389,24 @@ export default function SkyViewer() {
     };
   }
 
+  function handleCanvasMouseMove(event: MouseEvent<HTMLCanvasElement>) {
+    if (!trackingTargetRef.current && trackingActivationTimeoutRef.current === null) return;
+    if ((event.buttons & 1) !== 1) return;
+
+    const dragDistance = Math.hypot(
+      event.clientX - dragStateRef.current.x,
+      event.clientY - dragStateRef.current.y
+    );
+
+    if (dragDistance > 4) {
+      cancelTargetTracking();
+    }
+  }
+
+  function handleCanvasWheel() {
+    cancelTargetTracking();
+  }
+
   function handleCanvasClick(event: MouseEvent<HTMLCanvasElement>) {
     const dragDistance = Math.hypot(
       event.clientX - dragStateRef.current.x,
@@ -907,6 +1414,7 @@ export default function SkyViewer() {
     );
 
     if (dragDistance > 6) {
+      cancelTargetTracking();
       return;
     }
 
@@ -977,11 +1485,17 @@ export default function SkyViewer() {
 
     try {
       const normalizedTerm = normalizeSearchKey(term);
+      const selectedTarget =
+        selectedTargetRef.current &&
+        normalizeSearchKey(selectedTargetRef.current.label) === normalizedTerm
+          ? selectedTargetRef.current
+          : null;
       const exactSuggestion =
         suggestions.find((item) => item.key === normalizedTerm) ??
         searchSuggestionsRef.current.find((item) => item.key === normalizedTerm);
       const engineTarget = findEngineObject(engine, term);
       const target =
+        selectedTarget?.obj ??
         exactSuggestion?.obj ??
         engineTarget ??
         catalogSearchRef.current.get(normalizeSearchKey(term)) ??
@@ -996,11 +1510,22 @@ export default function SkyViewer() {
         applyDeepSkyMode(engine, true);
       }
 
+      const matchedClickTarget = clickTargetsRef.current.find(
+        (item) => item.obj.v === target.v
+      );
       focusTarget(
         target,
-        exactSuggestion?.label ?? suggestions[0]?.label ?? term,
-        exactSuggestion?.obj === target
+        selectedTarget?.label ??
+          exactSuggestion?.label ??
+          matchedClickTarget?.label ??
+          (suggestions[0]?.obj === target ? suggestions[0].label : undefined) ??
+          labelForObject(target, term, clickTargetsRef.current),
+        selectedTarget?.obj === target
+          ? selectedTarget.vector
+          : exactSuggestion?.obj === target
           ? exactSuggestion.vector
+          : matchedClickTarget?.vector
+          ? matchedClickTarget.vector
           : suggestions[0]?.obj === target
             ? suggestions[0].vector
             : undefined
@@ -1033,20 +1558,40 @@ export default function SkyViewer() {
     let frameId = 0;
 
     const tick = () => {
-      const speed = TIME_SPEEDS[timeSpeedIndex] ?? TIME_SPEEDS[0];
       const now = performance.now();
       const lastTick = lastTickRef.current ?? now;
       const elapsedSeconds = (now - lastTick) / 1000;
       lastTickRef.current = now;
 
+      if (isTimePaused) {
+        frameId = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      const speed = TIME_SPEEDS[timeSpeedIndex] ?? TIME_SPEEDS[0];
       simulatedTimeRef.current = new Date(
         simulatedTimeRef.current.getTime() +
           elapsedSeconds * speed.multiplier * 1000
       );
 
-      applyObservationTime(simulatedTimeRef.current);
-      const nextTime = toDateTimeLocalValue(simulatedTimeRef.current);
-      if (!isEditingTime) {
+      const lastSkyUpdate = lastSkyUpdateRef.current ?? 0;
+      if (now - lastSkyUpdate >= SKY_TIME_UPDATE_INTERVAL_MS) {
+        lastSkyUpdateRef.current = now;
+        applyObservationTime(simulatedTimeRef.current);
+        const trackingTarget = trackingTargetRef.current;
+        const engine = engineRef.current;
+        if (engine && trackingTarget) {
+          centerTarget(engine, trackingTarget.obj, trackingTarget.vector, 0, false);
+        }
+      }
+
+      const lastTimeDisplayUpdate = lastTimeDisplayUpdateRef.current ?? 0;
+      if (
+        !isEditingTime &&
+        now - lastTimeDisplayUpdate >= TIME_DISPLAY_UPDATE_INTERVAL_MS
+      ) {
+        lastTimeDisplayUpdateRef.current = now;
+        const nextTime = toDateTimeLocalValue(simulatedTimeRef.current);
         setTimeDraft(nextTime);
       }
 
@@ -1057,11 +1602,14 @@ export default function SkyViewer() {
 
     return () => {
       lastTickRef.current = null;
+      lastSkyUpdateRef.current = null;
+      lastTimeDisplayUpdateRef.current = null;
       window.cancelAnimationFrame(frameId);
     };
   }, [
     applyObservationTime,
     isEditingTime,
+    isTimePaused,
     observerLocation,
     status,
     timeSpeedIndex,
@@ -1126,7 +1674,7 @@ export default function SkyViewer() {
     applyObservationTime(now);
   }
 
-  function handleToggle(name: keyof typeof TOGGLE_PATHS) {
+  async function handleToggle(name: keyof typeof TOGGLE_PATHS) {
     const engine = engineRef.current;
     const nextValue = !toggles[name];
     setToggles((current) => ({ ...current, [name]: nextValue }));
@@ -1134,6 +1682,21 @@ export default function SkyViewer() {
     if (!engine) return;
 
     trySetAllValues(engine, TOGGLE_PATHS[name], nextValue);
+    if (name === "constellationLines") {
+      trySetValue(engine, ["constellations.show_only_pointed"], false);
+      getEngineModule(engine, "skycultures")?.update?.();
+      getEngineModule(engine, "constellations")?.update?.();
+      if (nextValue && constellationLineObjectsRef.current.length === 0) {
+        constellationLineObjectsRef.current =
+          await createConstellationLineObjects(engine);
+      }
+      setConstellationLineObjectVisible(
+        engine,
+        constellationLineObjectsRef.current,
+        nextValue,
+        isConstellationLineObjectAddedRef
+      );
+    }
   }
 
   function handleDeepSkyModeToggle() {
@@ -1151,6 +1714,8 @@ export default function SkyViewer() {
         ref={canvasRef}
         className={styles.canvas}
         onMouseDown={handleCanvasMouseDown}
+        onMouseMove={handleCanvasMouseMove}
+        onWheel={handleCanvasWheel}
         onClick={handleCanvasClick}
       />
 
@@ -1183,7 +1748,7 @@ export default function SkyViewer() {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       setQuery(item.label);
-                      focusTarget(item.obj, item.label, item.vector);
+                      selectTarget(item.obj, item.label, item.vector);
                     }}
                   >
                     {item.label}
@@ -1206,7 +1771,8 @@ export default function SkyViewer() {
               onClick={openTimePicker}
               disabled={status !== "ready"}
             >
-              {formatDisplayDateTime(timeDraft)}
+              <CalendarIcon />
+              <span>{formatDisplayDateTime(timeDraft)}</span>
             </button>
             <button
               type="button"
@@ -1329,6 +1895,25 @@ export default function SkyViewer() {
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            className={[styles.timePauseButton, isTimePaused ? styles.active : ""]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => {
+              lastTickRef.current = performance.now();
+              setIsTimePaused((current) => !current);
+            }}
+            disabled={status !== "ready"}
+            aria-label={isTimePaused ? "시간 재생" : "시간 멈춤"}
+            aria-pressed={isTimePaused}
+            title={isTimePaused ? "시간 재생" : "시간 멈춤"}
+          >
+            <span
+              className={isTimePaused ? styles.playIcon : styles.pauseIcon}
+              aria-hidden="true"
+            />
+          </button>
         </div>
 
       <LocationPicker
@@ -1369,6 +1954,14 @@ export default function SkyViewer() {
           </button>
           <button
             type="button"
+            className={toggles.constellationLines ? styles.active : ""}
+            onClick={() => handleToggle("constellationLines")}
+            aria-pressed={toggles.constellationLines}
+          >
+            별자리선 {toggles.constellationLines ? "켜짐" : "꺼짐"}
+          </button>
+          <button
+            type="button"
             className={toggles.atmosphere ? styles.active : ""}
             onClick={() => handleToggle("atmosphere")}
             aria-pressed={toggles.atmosphere}
@@ -1393,6 +1986,60 @@ export default function SkyViewer() {
           </button>
         </div>
       </section>
+
+      <div className={styles.bottomToolbar} aria-label="Display toggles">
+        <button
+          type="button"
+          className={toggles.constellationLines ? styles.active : ""}
+          onClick={() => handleToggle("constellationLines")}
+          aria-label={`별자리선 ${toggles.constellationLines ? "끄기" : "켜기"}`}
+          aria-pressed={toggles.constellationLines}
+          title={`별자리선 ${toggles.constellationLines ? "끄기" : "켜기"}`}
+        >
+          <ToolbarIcon name="constellation" />
+        </button>
+        <button
+          type="button"
+          className={toggles.horizontalCoordinates ? styles.active : ""}
+          onClick={() => handleToggle("horizontalCoordinates")}
+          aria-label={`지평좌표 ${toggles.horizontalCoordinates ? "끄기" : "켜기"}`}
+          aria-pressed={toggles.horizontalCoordinates}
+          title={`지평좌표 ${toggles.horizontalCoordinates ? "끄기" : "켜기"}`}
+        >
+          <ToolbarIcon name="horizontal" />
+        </button>
+        <button
+          type="button"
+          className={toggles.atmosphere ? styles.active : ""}
+          onClick={() => handleToggle("atmosphere")}
+          aria-label={`대기 ${toggles.atmosphere ? "끄기" : "켜기"}`}
+          aria-pressed={toggles.atmosphere}
+          title={`대기 ${toggles.atmosphere ? "끄기" : "켜기"}`}
+        >
+          <ToolbarIcon name="atmosphere" />
+        </button>
+        <button
+          type="button"
+          className={toggles.ground ? styles.active : ""}
+          onClick={() => handleToggle("ground")}
+          aria-label={`지평 ${toggles.ground ? "끄기" : "켜기"}`}
+          aria-pressed={toggles.ground}
+          title={`지평 ${toggles.ground ? "끄기" : "켜기"}`}
+        >
+          <ToolbarIcon name="ground" />
+        </button>
+        <button
+          type="button"
+          className={deepSkyMode ? styles.active : ""}
+          onClick={handleDeepSkyModeToggle}
+          aria-label={`딥스카이 ${deepSkyMode ? "끄기" : "켜기"}`}
+          aria-pressed={deepSkyMode}
+          title={`딥스카이 ${deepSkyMode ? "끄기" : "켜기"}`}
+        >
+          <ToolbarIcon name="deepSky" />
+        </button>
+      </div>
+
       <ObjectInfoPanel info={selectedInfo} />
     </main>
   );

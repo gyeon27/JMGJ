@@ -8,6 +8,7 @@ export type SweObj = {
   path?: string;
   name?: string;
   add?: (obj: SweObj) => SweObj;
+  data?: Record<string, unknown>;
   remove?: (obj: SweObj) => void;
   destroy?: () => void;
   addDataSource?: (args: { url: string; key?: string }) => void;
@@ -18,6 +19,7 @@ export type SweObj = {
     model_data?: Record<string, unknown>;
   };
   radec?: number[];
+  z?: number;
   update?: () => void;
 };
 
@@ -36,6 +38,7 @@ export type StellariumEngine = {
   createObj?: (type: string, args: Record<string, unknown>) => SweObj | null;
   date2MJD?: (date: number) => number;
   getObj?: (name: string) => SweObj | null;
+  getModule?: (name: string) => SweObj | null;
   getValue?: (path: string) => unknown;
   lookAt?: (position: [number, number, number], duration?: number) => void;
   pointAndLock?: (target: SweObj, duration?: number) => void;
@@ -49,6 +52,7 @@ export type StellariumEngine = {
 
 export type StellariumFactory = (options: {
   canvasElement: HTMLCanvasElement;
+  res?: string[];
   wasmFile: string;
 }) => Promise<StellariumEngine>;
 
