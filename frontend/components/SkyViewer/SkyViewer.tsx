@@ -245,7 +245,7 @@ function setEngineSelection(engine: StellariumEngine, target: SweObj) {
 
   trySetValue(engine, ["selection", "core.selection"], target);
   trySetValue(engine, ["pointer.visible"], true);
-  engine.core?.update?.();
+  (engine.core as SweObj | undefined)?.update?.();
   engine._core_update?.();
 }
 
