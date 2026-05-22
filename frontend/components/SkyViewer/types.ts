@@ -42,6 +42,7 @@ export type StellariumEngine = {
   getValue?: (path: string) => unknown;
   lookAt?: (position: [number, number, number], duration?: number) => void;
   pointAndLock?: (target: SweObj, duration?: number) => void;
+  zoomTo?: (fov: number, duration?: number) => void;
   setValue?: (path: string, value: unknown) => void;
   _core_update?: () => void;
   _core_set_time?: (mjd: number, duration: number) => void;

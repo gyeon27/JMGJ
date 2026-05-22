@@ -657,7 +657,7 @@
 .infoPanel {
   position: absolute;
   right: 20px;
-  bottom: 72px;
+  bottom: 20px;
   width: min(380px, calc(100vw - 40px));
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -797,7 +797,7 @@
 
   .infoPanel {
     right: 12px;
-    bottom: 72px;
+    bottom: 16px;
     left: 12px;
     width: auto;
   }
