@@ -396,6 +396,7 @@ export default function SkyViewer() {
     atmosphere: false,
     ground: true,
   });
+  const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
 
   const statusText = useMemo(() => {
     if (status === "ready") return "엔진 연결됨";
@@ -953,40 +954,53 @@ export default function SkyViewer() {
         onClick={handleCanvasClick}
       />
 
-      <SkyViewerControls
-        calendarDays={calendarDays}
-        deepSkyMode={deepSkyMode}
-        formatDisplayDateTime={formatDisplayDateTime}
-        isTimePaused={isTimePaused}
-        isTimePickerOpen={isTimePickerOpen}
-        locationName={locationQuery}
-        observerLocation={observerLocation}
-        query={query}
-        status={status}
-        statusText={statusText}
-        suggestions={suggestions}
-        timeDraft={timeDraft}
-        timeDraftDate={timeDraftDate}
-        timePickerMonth={timePickerMonth}
-        timeSpeedIndex={timeSpeedIndex}
-        timeSpeeds={TIME_SPEEDS}
-        toggles={toggles}
-        weekdayLabels={WEEKDAY_LABELS}
-        onApplyLocation={handleApplyLocation}
-        onApplyTime={handleApplyTime}
-        onDeepSkyModeToggle={handleDeepSkyModeToggle}
-        onDraftDateChange={updateDraftDate}
-        onDraftTimeChange={updateDraftTime}
-        onOpenTimePicker={openTimePicker}
-        onQueryChange={updateQuery}
-        onSearchSubmit={handleSearch}
-        onSuggestionSelect={focusSuggestion}
-        onTimePauseToggle={handleTimePauseToggle}
-        onTimePickerMonthChange={setTimePickerMonth}
-        onTimeSpeedChange={setTimeSpeedIndex}
-        onToggle={handleToggle}
-        onUseCurrentTime={handleUseCurrentTime}
-      />
+      <button
+        type="button"
+        className={styles.panelToggle}
+        onClick={() => setIsControlPanelOpen((current) => !current)}
+        aria-label={isControlPanelOpen ? "관측 패널 닫기" : "관측 패널 열기"}
+        aria-expanded={isControlPanelOpen}
+        title={isControlPanelOpen ? "관측 패널 닫기" : "관측 패널 열기"}
+      >
+        <span aria-hidden="true" />
+      </button>
+
+      {isControlPanelOpen && (
+        <SkyViewerControls
+          calendarDays={calendarDays}
+          deepSkyMode={deepSkyMode}
+          formatDisplayDateTime={formatDisplayDateTime}
+          isTimePaused={isTimePaused}
+          isTimePickerOpen={isTimePickerOpen}
+          locationName={locationQuery}
+          observerLocation={observerLocation}
+          query={query}
+          status={status}
+          statusText={statusText}
+          suggestions={suggestions}
+          timeDraft={timeDraft}
+          timeDraftDate={timeDraftDate}
+          timePickerMonth={timePickerMonth}
+          timeSpeedIndex={timeSpeedIndex}
+          timeSpeeds={TIME_SPEEDS}
+          toggles={toggles}
+          weekdayLabels={WEEKDAY_LABELS}
+          onApplyLocation={handleApplyLocation}
+          onApplyTime={handleApplyTime}
+          onDeepSkyModeToggle={handleDeepSkyModeToggle}
+          onDraftDateChange={updateDraftDate}
+          onDraftTimeChange={updateDraftTime}
+          onOpenTimePicker={openTimePicker}
+          onQueryChange={updateQuery}
+          onSearchSubmit={handleSearch}
+          onSuggestionSelect={focusSuggestion}
+          onTimePauseToggle={handleTimePauseToggle}
+          onTimePickerMonthChange={setTimePickerMonth}
+          onTimeSpeedChange={setTimeSpeedIndex}
+          onToggle={handleToggle}
+          onUseCurrentTime={handleUseCurrentTime}
+        />
+      )}
 
       <SkyViewerToolbar
         deepSkyMode={deepSkyMode}

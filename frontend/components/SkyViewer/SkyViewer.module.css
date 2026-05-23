@@ -20,7 +20,7 @@
   top: 20px;
   left: 20px;
   width: min(390px, calc(100vw - 40px));
-  padding: 16px;
+  padding: 20px 16px 16px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(8, 12, 24, 0.78);
@@ -29,12 +29,67 @@
   z-index: 2;
 }
 
+.panelToggle {
+  position: absolute;
+  top: 41px;
+  left: 41px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(125, 211, 252, 0.26);
+  border-radius: 8px;
+  background: rgba(24, 45, 64, 0.92);
+  color: #dbeafe;
+  cursor: pointer;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.panelToggle:hover {
+  border-color: rgba(125, 211, 252, 0.42);
+  background: rgba(30, 58, 82, 0.98);
+  color: #ffffff;
+}
+
+.panelToggle span,
+.panelToggle span::before,
+.panelToggle span::after {
+  display: block;
+  width: 24px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.panelToggle span {
+  position: relative;
+}
+
+.panelToggle span::before,
+.panelToggle span::after {
+  position: absolute;
+  left: 0;
+  content: "";
+}
+
+.panelToggle span::before {
+  top: -8px;
+}
+
+.panelToggle span::after {
+  top: 8px;
+}
+
 .header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 14px;
+  min-height: 42px;
+  padding-left: 61px;
 }
 
 .kicker {
@@ -768,6 +823,11 @@
     left: 12px;
     width: calc(100vw - 24px);
     padding: 12px;
+  }
+
+  .panelToggle {
+    top: 29px;
+    left: 29px;
   }
 
   .header h1 {
