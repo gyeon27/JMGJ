@@ -71,7 +71,6 @@ const SEOUL = {
   elevation: 0,
 };
 
-const SKY_TIME_UPDATE_INTERVAL_MS = 100;
 const TIME_DISPLAY_UPDATE_INTERVAL_MS = 250;
 
 const TIME_SPEEDS = [
@@ -363,7 +362,6 @@ export default function SkyViewer() {
   const loadedPlanetSurveysRef = useRef(new Set<string>());
   const simulatedTimeRef = useRef(new Date());
   const lastTickRef = useRef<number | null>(null);
-  const lastSkyUpdateRef = useRef<number | null>(null);
   const lastTimeDisplayUpdateRef = useRef<number | null>(null);
   const dragStateRef = useRef({
     x: 0,
@@ -739,17 +737,21 @@ export default function SkyViewer() {
     }
   }
 
+  const updateSelectedInfo = useCallback(() => {
+    const engine = engineRef.current;
+    const selected = selectedTargetRef.current;
+    if (!engine || !selected) return;
+
+    setSelectedInfo(
+      getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
+    );
+  }, []);
+
   const applyObservationTime = useCallback((value: string | Date) => {
     const engine = engineRef.current;
     if (!engine) return false;
 
     if (setObservationTime(engine, value)) {
-      const selected = selectedTargetRef.current;
-      if (selected) {
-        setSelectedInfo(
-          getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
-        );
-      }
       return true;
     }
 
@@ -778,15 +780,11 @@ export default function SkyViewer() {
           elapsedSeconds * speed.multiplier * 1000
       );
 
-      const lastSkyUpdate = lastSkyUpdateRef.current ?? 0;
-      if (now - lastSkyUpdate >= SKY_TIME_UPDATE_INTERVAL_MS) {
-        lastSkyUpdateRef.current = now;
-        applyObservationTime(simulatedTimeRef.current);
-        const trackingTarget = trackingTargetRef.current;
-        const engine = engineRef.current;
-        if (engine && trackingTarget) {
-          centerTarget(engine, trackingTarget.obj, trackingTarget.vector, 0, false);
-        }
+      applyObservationTime(simulatedTimeRef.current);
+      const trackingTarget = trackingTargetRef.current;
+      const engine = engineRef.current;
+      if (engine && trackingTarget) {
+        centerTarget(engine, trackingTarget.obj, trackingTarget.vector, 0, false);
       }
 
       const lastTimeDisplayUpdate = lastTimeDisplayUpdateRef.current ?? 0;
@@ -797,6 +795,7 @@ export default function SkyViewer() {
         lastTimeDisplayUpdateRef.current = now;
         const nextTime = toDateTimeLocalValue(simulatedTimeRef.current);
         setTimeDraft(nextTime);
+        updateSelectedInfo();
       }
 
       frameId = window.requestAnimationFrame(tick);
@@ -806,7 +805,6 @@ export default function SkyViewer() {
 
     return () => {
       lastTickRef.current = null;
-      lastSkyUpdateRef.current = null;
       lastTimeDisplayUpdateRef.current = null;
       window.cancelAnimationFrame(frameId);
     };
@@ -818,6 +816,7 @@ export default function SkyViewer() {
     observerLocation,
     status,
     timeSpeedIndex,
+    updateSelectedInfo,
   ]);
 
   function handleTimeChange(value: string) {
