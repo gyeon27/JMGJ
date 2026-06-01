@@ -7,7 +7,7 @@ type InfoTab = "position" | "names" | "photometry";
 const INFO_TABS: Array<{ id: InfoTab; label: string }> = [
   { id: "position", label: "위치" },
   { id: "names", label: "이름" },
-  { id: "photometry", label: "광도" },
+  { id: "photometry", label: "정보" },
 ];
 
 function InfoGrid({ items }: { items: Array<[string, string]> }) {

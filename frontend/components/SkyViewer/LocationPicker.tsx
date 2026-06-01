@@ -3,7 +3,7 @@ import {
   KeyboardEvent,
   MouseEvent,
   PointerEvent,
-  WheelEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -86,6 +86,7 @@ export function LocationPicker({
   observerLocation,
   onApply,
 }: LocationPickerProps) {
+  const mapCanvasRef = useRef<HTMLDivElement | null>(null);
   const mapMovedRef = useRef(false);
   const [mapSearchQuery, setMapSearchQuery] = useState("");
   const [mapSelectionName, setMapSelectionName] = useState(locationName);
@@ -154,6 +155,29 @@ export function LocationPicker({
       },
     };
   }, [isMapOpen, mapCenter, mapSelection, mapZoom]);
+
+  useEffect(() => {
+    if (!isMapOpen) return;
+
+    const mapCanvas = mapCanvasRef.current;
+    if (!mapCanvas) return;
+
+    const handleWheel = (event: globalThis.WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const direction = event.deltaY < 0 ? 1 : -1;
+      setMapZoom((currentZoom) =>
+        clamp(currentZoom + direction, MAP_MIN_ZOOM, MAP_MAX_ZOOM)
+      );
+    };
+
+    mapCanvas.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      mapCanvas.removeEventListener("wheel", handleWheel);
+    };
+  }, [isMapOpen]);
 
   function openLocationMap() {
     setMapCenter(observerLocation);
@@ -249,13 +273,6 @@ export function LocationPicker({
 
   function handleMapZoom(nextZoom: number) {
     setMapZoom(clamp(nextZoom, MAP_MIN_ZOOM, MAP_MAX_ZOOM));
-  }
-
-  function handleMapWheel(event: WheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-
-    const direction = event.deltaY < 0 ? 1 : -1;
-    handleMapZoom(mapZoom + direction);
   }
 
   async function handleMapSearch(event: FormEvent<HTMLFormElement>) {
@@ -426,6 +443,7 @@ export function LocationPicker({
             </div>
 
             <div
+              ref={mapCanvasRef}
               className={styles.mapCanvas}
               style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
               onClick={handleMapClick}
@@ -433,7 +451,6 @@ export function LocationPicker({
               onPointerMove={handleMapPointerMove}
               onPointerUp={handleMapPointerUp}
               onPointerCancel={handleMapPointerUp}
-              onWheel={handleMapWheel}
             >
               {mapView.tiles.map((tile) => (
                 <div
