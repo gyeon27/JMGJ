@@ -31,6 +31,19 @@ type LocationPickerProps = {
   onApply: (location: ObserverLocation, name?: string) => boolean;
 };
 
+function getGeoLocationErrorMessage(error: GeolocationPositionError) {
+  if (error.code === error.PERMISSION_DENIED) {
+    return "위치 권한이 거부됐습니다.";
+  }
+  if (error.code === error.POSITION_UNAVAILABLE) {
+    return "현재 위치를 확인할 수 없습니다.";
+  }
+  if (error.code === error.TIMEOUT) {
+    return "현재 위치 확인 시간이 초과됐습니다.";
+  }
+  return "현재 위치를 가져오지 못했습니다.";
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -78,6 +91,11 @@ export function LocationPicker({
   const [mapSelectionName, setMapSelectionName] = useState(locationName);
   const [mapSearchState, setMapSearchState] =
     useState<LocationApplyState>("idle");
+  const [geoLocationState, setGeoLocationState] =
+    useState<LocationApplyState>("idle");
+  const [geoLocationMessage, setGeoLocationMessage] = useState<string | null>(
+    null
+  );
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [mapCenter, setMapCenter] = useState<ObserverLocation>(observerLocation);
   const [mapSelection, setMapSelection] =
@@ -143,6 +161,8 @@ export function LocationPicker({
     setMapSelectionName(locationName);
     setMapSearchQuery("");
     setMapSearchState("idle");
+    setGeoLocationState("idle");
+    setGeoLocationMessage(null);
     setIsMapOpen(true);
   }
 
@@ -278,6 +298,50 @@ export function LocationPicker({
     }
   }
 
+  function handleCurrentLocation() {
+    if (!navigator.geolocation) {
+      setGeoLocationState("error");
+      setGeoLocationMessage("이 브라우저에서는 현재 위치를 사용할 수 없습니다.");
+      return;
+    }
+
+    setGeoLocationState("loading");
+    setGeoLocationMessage("현재 위치를 확인하는 중입니다.");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const nextLocation = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+
+        setMapCenter(nextLocation);
+        setMapSelection(nextLocation);
+        setMapSelectionName("현재 위치");
+        setMapZoom((current) => Math.max(current, 15));
+
+        if (onApply(nextLocation, "현재 위치")) {
+          setGeoLocationState("ok");
+          setGeoLocationMessage("현재 위치를 관측 위치로 적용했습니다.");
+          setIsMapOpen(false);
+          return;
+        }
+
+        setGeoLocationState("error");
+        setGeoLocationMessage("현재 위치를 엔진에 적용하지 못했습니다.");
+      },
+      (error) => {
+        setGeoLocationState("error");
+        setGeoLocationMessage(getGeoLocationErrorMessage(error));
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 60_000,
+        timeout: 10_000,
+      }
+    );
+  }
+
   return (
     <>
       <div className={styles.location}>
@@ -338,6 +402,28 @@ export function LocationPicker({
                 검색
               </button>
             </form>
+            <div className={styles.mapUtilityActions}>
+              <button
+                type="button"
+                className={styles.currentLocationButton}
+                onClick={handleCurrentLocation}
+                disabled={geoLocationState === "loading"}
+              >
+                {geoLocationState === "loading" ? "위치 확인 중" : "현재 위치"}
+              </button>
+              {geoLocationMessage && (
+                <span
+                  className={
+                    geoLocationState === "error"
+                      ? styles.mapStatusError
+                      : styles.mapStatusMessage
+                  }
+                  aria-live="polite"
+                >
+                  {geoLocationMessage}
+                </span>
+              )}
+            </div>
 
             <div
               className={styles.mapCanvas}

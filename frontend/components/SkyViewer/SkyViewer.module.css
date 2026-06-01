@@ -151,7 +151,7 @@
   right: 0;
   left: 0;
   display: grid;
-  max-height: 252px;
+  max-height: 188px;
   overflow-y: auto;
   border: 1px solid rgba(125, 211, 252, 0.22);
   border-radius: 8px;
@@ -172,6 +172,11 @@
 
 .suggestionList button:hover {
   background: rgba(125, 211, 252, 0.16);
+}
+
+.suggestionList button.activeSuggestion {
+  background: rgba(125, 211, 252, 0.24);
+  color: #ffffff;
 }
 
 .field,
@@ -380,6 +385,42 @@
   align-items: center;
 }
 
+.timePickerYearControls {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
+  gap: 8px;
+  align-items: end;
+}
+
+.timePickerYearControls label {
+  display: grid;
+  gap: 4px;
+}
+
+.timePickerYearControls span {
+  color: #93c5fd;
+  font-size: 12px;
+  text-align: center;
+}
+
+.timePickerYearControls input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+  font: inherit;
+  text-align: center;
+  outline: none;
+  padding: 0 8px;
+}
+
+.timePickerYearControls input:focus {
+  border-color: #7dd3fc;
+}
+
 .timePickerHeader strong {
   color: #ffffff;
   font-size: 15px;
@@ -579,6 +620,25 @@
   letter-spacing: 0;
 }
 
+.mapDialog button {
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(125, 211, 252, 0.16);
+  color: #f8fafc;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mapDialog button:hover {
+  background: rgba(125, 211, 252, 0.26);
+}
+
+.mapDialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .iconButton {
   width: 36px;
   flex: 0 0 auto;
@@ -607,6 +667,30 @@
 
 .mapSearch input:focus {
   border-color: #7dd3fc;
+}
+
+.mapUtilityActions {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 12px;
+}
+
+.currentLocationButton {
+  width: 100%;
+}
+
+.mapStatusMessage,
+.mapStatusError {
+  min-width: 0;
+  color: #bfdbfe;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mapStatusError {
+  color: #fecaca;
 }
 
 .mapCanvas {
@@ -784,6 +868,42 @@
   overflow-wrap: anywhere;
 }
 
+.phasePreview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.52);
+  color: #dbeafe;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.phasePreview svg {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 8px rgba(191, 219, 254, 0.34));
+}
+
+.phaseDark {
+  fill: #111827;
+}
+
+.phaseLight {
+  fill: #f8fafc;
+}
+
+.phaseRim {
+  fill: none;
+  stroke: rgba(226, 232, 240, 0.5);
+  stroke-width: 2;
+}
+
 .aliasPanel {
   display: flex;
   flex-wrap: wrap;
@@ -848,6 +968,7 @@
   }
 
   .mapSearch,
+  .mapUtilityActions,
   .mapActions,
   .timeField,
   .timeControls,

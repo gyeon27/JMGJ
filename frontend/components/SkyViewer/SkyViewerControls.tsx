@@ -1,4 +1,11 @@
-import type { FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { LocationPicker } from "./LocationPicker";
 import styles from "./SkyViewer.module.css";
 import type { DisplayToggleName, DisplayToggles } from "./SkyViewerToolbar";
@@ -12,6 +19,9 @@ type TimeSpeed = {
   label: string;
   multiplier: number;
 };
+
+const MIN_PICKER_YEAR = 1;
+const MAX_PICKER_YEAR = 9999;
 
 type SkyViewerControlsProps = {
   calendarDays: Date[];
@@ -91,6 +101,91 @@ export function SkyViewerControls({
   onToggle,
   onUseCurrentTime,
 }: SkyViewerControlsProps) {
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+  const [yearInput, setYearInput] = useState(
+    String(timePickerMonth.getFullYear())
+  );
+  const activeSuggestionRef = useRef<HTMLButtonElement | null>(null);
+  const selectedSuggestionIndex =
+    suggestions.length > 0
+      ? Math.min(activeSuggestionIndex, suggestions.length - 1)
+      : -1;
+
+  useEffect(() => {
+    activeSuggestionRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [selectedSuggestionIndex]);
+
+  useEffect(() => {
+    setYearInput(String(timePickerMonth.getFullYear()));
+  }, [timePickerMonth]);
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (suggestions.length === 0) return;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSuggestionIndex((current) => (current + 1) % suggestions.length);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSuggestionIndex(
+        (current) => (current <= 0 ? suggestions.length : current) - 1
+      );
+      return;
+    }
+
+    if (event.key === "Enter" && selectedSuggestionIndex >= 0) {
+      event.preventDefault();
+      onSuggestionSelect(suggestions[selectedSuggestionIndex]);
+    }
+  }
+
+  function changePickerYear(nextYear: number) {
+    if (!Number.isFinite(nextYear)) return;
+
+    const year = Math.min(
+      MAX_PICKER_YEAR,
+      Math.max(MIN_PICKER_YEAR, Math.trunc(nextYear))
+    );
+    const month = timePickerMonth.getMonth();
+    const maxDate = new Date(year, month + 1, 0).getDate();
+    const nextDate = new Date(
+      year,
+      month,
+      Math.min(timeDraftDate.getDate(), maxDate)
+    );
+
+    onTimePickerMonthChange(new Date(year, month, 1));
+    onDraftDateChange(nextDate);
+  }
+
+  function handlePickerYearInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const nextValue = event.target.value.replace(/\D/g, "").slice(0, 4);
+    setYearInput(nextValue);
+  }
+
+  function applyPickerYearInput() {
+    const nextYear = Number(yearInput);
+    if (!yearInput || !Number.isFinite(nextYear)) {
+      setYearInput(String(timePickerMonth.getFullYear()));
+      return;
+    }
+
+    changePickerYear(nextYear);
+  }
+
+  function handlePickerYearKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+
+    event.preventDefault();
+    applyPickerYearInput();
+  }
+
   return (
     <section className={styles.panel} aria-label="Stellarium controls">
       <div className={styles.header}>
@@ -107,18 +202,39 @@ export function SkyViewerControls({
         <div className={styles.searchBox}>
           <input
             value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
+            onChange={(event) => {
+              setActiveSuggestionIndex(0);
+              onQueryChange(event.target.value);
+            }}
+            onKeyDown={handleSearchKeyDown}
             placeholder="Vega, Sirius, HR 7001..."
             aria-label="천체 검색"
+            aria-activedescendant={
+              selectedSuggestionIndex >= 0
+                ? `sky-suggestion-${selectedSuggestionIndex}`
+                : undefined
+            }
             autoComplete="off"
           />
           {suggestions.length > 0 && (
             <div className={styles.suggestionList}>
-              {suggestions.map((item) => (
+              {suggestions.map((item, index) => (
                 <button
-                  key={`${item.key}-${item.label}`}
+                  id={`sky-suggestion-${index}`}
+                  key={`${item.key}-${item.label}-${item.obj.v}`}
                   type="button"
+                  className={
+                    index === selectedSuggestionIndex
+                      ? styles.activeSuggestion
+                      : ""
+                  }
+                  ref={
+                    index === selectedSuggestionIndex
+                      ? activeSuggestionRef
+                      : undefined
+                  }
                   onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setActiveSuggestionIndex(index)}
                   onClick={() => onSuggestionSelect(item)}
                 >
                   {item.label}
@@ -154,6 +270,38 @@ export function SkyViewerControls({
         </div>
         {isTimePickerOpen && (
           <section className={styles.timePicker} aria-label="시간 선택">
+            <div className={styles.timePickerYearControls}>
+              <button
+                type="button"
+                onClick={() =>
+                  changePickerYear(timePickerMonth.getFullYear() - 1)
+                }
+              >
+                -1년
+              </button>
+              <label>
+                <span>연도</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  minLength={1}
+                  maxLength={4}
+                  value={yearInput}
+                  onChange={handlePickerYearInputChange}
+                  onBlur={applyPickerYearInput}
+                  onKeyDown={handlePickerYearKeyDown}
+                  aria-label="연도"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  changePickerYear(timePickerMonth.getFullYear() + 1)
+                }
+              >
+                +1년
+              </button>
+            </div>
             <div className={styles.timePickerHeader}>
               <button
                 type="button"

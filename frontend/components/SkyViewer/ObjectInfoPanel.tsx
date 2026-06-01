@@ -23,6 +23,28 @@ function InfoGrid({ items }: { items: Array<[string, string]> }) {
   );
 }
 
+function PlanetPhasePreview({ fraction }: { fraction: number }) {
+  const lit = Math.min(1, Math.max(0, fraction));
+  const controlX = 50 + (lit - 0.5) * 170;
+  const litPath =
+    lit >= 0.995
+      ? "M50 5a45 45 0 1 1 0 90a45 45 0 1 1 0-90"
+      : lit <= 0.005
+        ? ""
+        : `M50 5 A45 45 0 0 1 50 95 Q ${controlX.toFixed(1)} 50 50 5 Z`;
+
+  return (
+    <div className={styles.phasePreview} aria-label={`행성 조명률 ${(lit * 100).toFixed(1)}%`}>
+      <svg viewBox="0 0 100 100" role="img" aria-hidden="true">
+        <circle cx="50" cy="50" r="45" className={styles.phaseDark} />
+        {litPath && <path d={litPath} className={styles.phaseLight} />}
+        <circle cx="50" cy="50" r="45" className={styles.phaseRim} />
+      </svg>
+      <span>{(lit * 100).toFixed(1)}%</span>
+    </div>
+  );
+}
+
 function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
   const [activeTab, setActiveTab] = useState<InfoTab>("position");
 
@@ -72,17 +94,18 @@ function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
       )}
 
       {activeTab === "photometry" && (
-        <InfoGrid
-          items={[
-            ["겉보기 등급", info.apparentMagnitude],
-            ["절대 등급", info.absoluteMagnitude],
-            ["거리", info.distance],
-            ["거리계수", info.distanceModulus],
-            ["분류", info.objectType],
-            ["크기", info.dimensions],
-            ["스펙트럼", info.spectrum],
-          ]}
-        />
+        <>
+          {info.phaseFraction !== null && (
+            <PlanetPhasePreview fraction={info.phaseFraction} />
+          )}
+          <InfoGrid
+            items={
+              info.physicalFields.length > 0
+                ? info.physicalFields
+                : [["물리량", "정보 없음"]]
+            }
+          />
+        </>
       )}
     </section>
   );

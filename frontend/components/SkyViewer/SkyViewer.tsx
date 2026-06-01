@@ -248,6 +248,21 @@ function setEngineSelection(engine: StellariumEngine, target: SweObj) {
   engine._core_update?.();
 }
 
+function clearEngineSelection(engine: StellariumEngine) {
+  try {
+    if (engine.core) {
+      engine.core.selection = null;
+    }
+  } catch {
+    // Some engine builds expose selection through setValue only.
+  }
+
+  trySetValue(engine, ["selection", "core.selection", "lock"], null);
+  trySetValue(engine, ["pointer.visible"], false);
+  (engine.core as SweObj | undefined)?.update?.();
+  engine._core_update?.();
+}
+
 function labelForObject(
   target: SweObj,
   fallback: string,
@@ -273,6 +288,60 @@ function labelForObject(
   }
 
   return fallback;
+}
+
+function getObjectSearchKeys(target: SweObj) {
+  const keys = new Set<string>();
+
+  try {
+    for (const designation of target.designations?.() ?? []) {
+      const key = normalizeSearchKey(designation.replace(/^NAME\s+/i, ""));
+      if (key) keys.add(key);
+    }
+  } catch {
+    // Some engine-native objects do not expose designations safely.
+  }
+
+  for (const value of [target.name, target.id]) {
+    if (!value) continue;
+    const key = normalizeSearchKey(value.replace(/^NAME\s+/i, ""));
+    if (key) keys.add(key);
+  }
+
+  return keys;
+}
+
+function findMatchingSearchTarget(
+  target: SweObj,
+  searchTargets: SearchSuggestion[]
+) {
+  const directMatch = searchTargets.find((item) => item.obj.v === target.v);
+  if (directMatch) return directMatch;
+
+  const keys = getObjectSearchKeys(target);
+  if (keys.size === 0) return null;
+
+  return (
+    searchTargets.find((item) => keys.has(item.key)) ??
+    searchTargets.find((item) => keys.has(normalizeSearchKey(item.label))) ??
+    null
+  );
+}
+
+function dedupeSearchSuggestions(items: SearchSuggestion[]) {
+  const seen = new Set<string>();
+  const unique: SearchSuggestion[] = [];
+
+  for (const item of items) {
+    const normalizedLabel = normalizeSearchKey(item.label);
+    const signature = `${normalizedLabel}:${item.obj.v}`;
+    if (seen.has(signature)) continue;
+
+    seen.add(signature);
+    unique.push(item);
+  }
+
+  return unique;
 }
 
 function getSafeObjectInfo(
@@ -412,6 +481,7 @@ export default function SkyViewer() {
 
   useEffect(() => {
     let disposed = false;
+    const catalogSearch = catalogSearchRef.current;
     const loadedPlanetSurveys = loadedPlanetSurveysRef.current;
 
     async function start() {
@@ -436,6 +506,9 @@ export default function SkyViewer() {
         if (disposed) return;
 
         engineRef.current = engine;
+        catalogSearch.clear();
+        searchSuggestionsRef.current = [];
+        clickTargetsRef.current = [];
         patchWasmMemoryHelpers(engine);
         addOfficialPlanetDataSources(engine);
         configureEngineLandscape(engine);
@@ -458,7 +531,7 @@ export default function SkyViewer() {
 
         await loadBrightStarCatalog(
           engine,
-          catalogSearchRef.current,
+          catalogSearch,
           searchSuggestionsRef.current,
           clickTargetsRef.current
         );
@@ -477,6 +550,9 @@ export default function SkyViewer() {
     return () => {
       disposed = true;
       engineRef.current = null;
+      catalogSearch.clear();
+      searchSuggestionsRef.current = [];
+      clickTargetsRef.current = [];
       constellationLineObjectsRef.current = [];
       isConstellationLineObjectAddedRef.current = false;
       loadedPlanetSurveys.clear();
@@ -513,12 +589,13 @@ export default function SkyViewer() {
     const deepSkyOnly = deepSkyCandidates.length > 0;
 
     setSuggestions(
-      [...deepSkySuggestions, ...searchSuggestionsRef.current]
-        .filter((item) =>
+      dedupeSearchSuggestions(
+        [...deepSkySuggestions, ...searchSuggestionsRef.current].filter((item) =>
           deepSkyOnly
             ? item.key === key || item.key.startsWith(key)
             : item.key.startsWith(key) || item.key.includes(key)
         )
+      )
         .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
         .slice(0, 8)
     );
@@ -557,6 +634,17 @@ export default function SkyViewer() {
     setQuery(label);
     setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
     setSuggestions([]);
+  }
+
+  function clearSelectedTarget() {
+    const engine = engineRef.current;
+    selectedTargetRef.current = null;
+    setSelectedInfo(null);
+    cancelTargetTracking();
+    setSuggestions([]);
+    if (engine) {
+      clearEngineSelection(engine);
+    }
   }
 
   function focusSuggestion(item: SearchSuggestion) {
@@ -612,25 +700,61 @@ export default function SkyViewer() {
 
     const engine = engineRef.current;
     const canvas = canvasRef.current;
-    if (!engine || !canvas || clickTargetsRef.current.length === 0) return;
+    if (!engine || !canvas) return;
 
     const rect = canvas.getBoundingClientRect();
     const clickX = event.clientX - rect.left;
     const clickY = event.clientY - rect.top;
+    const previousSelectionId = selectedTargetRef.current?.obj.v ?? null;
 
     window.setTimeout(() => {
+      const selectionRadius = getClickSelectionRadius(engine);
       const nativeSelection = getEngineSelection(engine);
       if (nativeSelection) {
-        const label = labelForObject(
+        const matchedNativeTarget = findMatchingSearchTarget(
           nativeSelection,
-          "Selected object",
-          clickTargetsRef.current
+          [...clickTargetsRef.current, ...searchSuggestionsRef.current]
         );
-        selectTarget(nativeSelection, label);
-        return;
+        if (nativeSelection.v !== previousSelectionId) {
+          const label = labelForObject(
+            nativeSelection,
+            "Selected object",
+            clickTargetsRef.current
+          );
+          selectTarget(
+            nativeSelection,
+            matchedNativeTarget?.label ?? label,
+            matchedNativeTarget?.vector
+          );
+          return;
+        }
+
+        const nativePoint = projectTargetToScreen(
+          engine,
+          canvas,
+          nativeSelection,
+          matchedNativeTarget?.vector
+        );
+        const nativeDistance = nativePoint
+          ? Math.hypot(nativePoint.x - clickX, nativePoint.y - clickY)
+          : Number.POSITIVE_INFINITY;
+        if (nativeDistance > selectionRadius) {
+          clearEngineSelection(engine);
+        } else {
+          const label = labelForObject(
+            nativeSelection,
+            "Selected object",
+            clickTargetsRef.current
+          );
+          selectTarget(
+            nativeSelection,
+            matchedNativeTarget?.label ?? label,
+            matchedNativeTarget?.vector
+          );
+          return;
+        }
       }
 
-      const selectionRadius = getClickSelectionRadius(engine);
       const solarSelectionRadius = Math.max(selectionRadius, 70);
       let closest: SearchSuggestion | null = null;
       let closestScore = Number.POSITIVE_INFINITY;
@@ -665,7 +789,10 @@ export default function SkyViewer() {
 
       if (closest) {
         selectTarget(closest.obj, closest.label, closest.vector);
+        return;
       }
+
+      clearSelectedTarget();
     }, 0);
   }
 

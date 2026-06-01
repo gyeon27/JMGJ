@@ -415,9 +415,8 @@ export async function loadBrightStarCatalog(
   if (!layer?.add) return 0;
 
   let added = 0;
+  let processed = 0;
   for (const star of catalog.stars) {
-    if (star.vmag > MAX_RENDERED_STAR_MAG) continue;
-
     const designations = buildStarDesignations(star);
     const vector = starToIcrfVector(star);
     const displayName = getStarDisplayName(star);
@@ -440,8 +439,11 @@ export async function loadBrightStarCatalog(
     });
 
     if (!obj) continue;
-    layer.add(obj);
-    added += 1;
+
+    if (star.vmag <= MAX_RENDERED_STAR_MAG) {
+      layer.add(obj);
+      added += 1;
+    }
 
     for (const name of star.names) {
       const key = normalizeSearchKey(name);
@@ -467,7 +469,8 @@ export async function loadBrightStarCatalog(
       vector,
     });
 
-    if (added % 500 === 0) {
+    processed += 1;
+    if (processed % 500 === 0) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
   }

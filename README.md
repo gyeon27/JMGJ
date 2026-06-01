@@ -24,9 +24,8 @@
 
 ## 프로젝트 구조
 
-project-root/
- ├ frontend/        # Next.js 기반 프론트엔드
- └ backend/         # FastAPI 기반 백엔드
+frontend/        # Next.js 기반 프론트엔드
+backend/         # FastAPI 기반 백엔드
 
 ---
 
@@ -34,14 +33,14 @@ project-root/
 
 ### 1. Backend 실행
 
-cd backend/src  
-uvicorn app.main:app --reload
+cd backend
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir src
 
 ### 2. Frontend 실행
 
 cd frontend  
 npm install  
-npm run dev
+npm.cmd run dev
 
 ### 3. 접속
 

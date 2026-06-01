@@ -78,8 +78,8 @@ export type ObjectInfo = {
   distance: string;
   distanceModulus: string;
   objectType: string;
-  dimensions: string;
-  spectrum: string;
+  physicalFields: Array<[string, string]>;
+  phaseFraction: number | null;
 };
 
 export type BrightStar = {
