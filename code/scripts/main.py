@@ -1,9 +1,19 @@
-from config import EnvironmentConfig
-from data_loader import *
-from calculator import run_pipeline
+import argparse
+import os
+import sys
 from datetime import datetime
 import time
 import numpy as np
+import rasterio
+
+CODE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if CODE_DIR not in sys.path:
+    sys.path.insert(0, CODE_DIR)
+
+from core.config import EnvironmentConfig
+from core.data_loader import environment_query, load_pixel_data_from_h5
+from core.calculator import calculate_directional_shielding, prepare_pixel_geometry, run_pipeline
+from cli_common import add_data_args
 
 # main.py 내부 get_time_input 함수 수정
 
@@ -27,7 +37,7 @@ def get_time_input():
         else:
             print("Y 또는 N을 입력해주세요.\n")
 
-def main():
+def main(args):
     print('\n--- main.py started. ---')
     
     # [핵심 수정 1] 관측 좌표 입력 스킵 방지 및 예외 처리
@@ -70,18 +80,36 @@ def main():
     print(f"\n[알림] 설정된 관측 시간: {time_input}\n")
 
     # 환경 데이터 쿼리
-    aod, cloud_fraction, cloud_base_h, seeing, moonlight, moon_angle = environment_query(time_input, *observer_coordinates)
-
-    H5_FILE_PATH = r"C:\Users\yun09\Desktop\제곽\2026\1.연구\2.전람회\전람회\전람회\광공해\VNP46A3.A2026001.h30v05.002.2026041165901.h5"  # 위성 데이터
-    DEM_IMG_PATH = r"C:\Users\yun09\Desktop\제곽\2026\1.연구\2.전람회\전람회\전람회\한반도\한반도90m_GRS80.img"     # 지형 데이터
+    aod, cloud_fraction, cloud_base_h, seeing, moonlight, moon_angle, moon_phase_angle, moon_cloud_transmission = environment_query(time_input, *observer_coordinates)
 
     # 광원 데이터 로딩
     print("satellite data loading...")
-    pixel_data = load_pixel_data_from_h5(H5_FILE_PATH, observer_coordinates, max_radius_km=100.0)  # 관측자 주변 100km 반경 데이터만 로딩
+    pixel_data = load_pixel_data_from_h5(args.h5, observer_coordinates, max_radius_km=args.radius_km)
     
     if not pixel_data:
         print("nothing loaded. check the file path and data format.")
         return
+
+    with rasterio.open(args.dem) as src:
+        dem_data = (src.read(1), src.transform)
+
+    pixel_data = prepare_pixel_geometry(
+        pixel_data,
+        observer_coordinates,
+        max_radius_km=args.radius_km,
+        dem_data=dem_data,
+        keep_radiance_fraction=args.keep_radiance_fraction,
+        min_pixels=args.min_pixels,
+        max_pixels=args.max_pixels,
+    )
+
+    moon_shield_deg = calculate_directional_shielding(
+        observer_coordinates,
+        moon_angle[1],
+        dem_data[0],
+        dem_data[1],
+        max_dist_km=args.radius_km,
+    )
 
     # 물리 엔진 가동
     print("calculating...")
@@ -91,7 +119,9 @@ def main():
         cloud_fraction=cloud_fraction,
         cloud_base_h=cloud_base_h,
         seeing=seeing,
-        moonlight=moonlight
+        moonlight=moonlight,
+        moon_phase_angle_deg=moon_phase_angle,
+        moon_cloud_transmission=moon_cloud_transmission,
     )
 
     final_radiance = run_pipeline(
@@ -99,8 +129,10 @@ def main():
         observer_angles=observer_angles,            # 관측 천정각, 방위각
         moon_angles=moon_angle,                     # 달 천정각, 방위각
         pixel_data=pixel_data,
-        dem_path=DEM_IMG_PATH,
-        config=my_config                             # 최적화 대상 변수들을 포함한 환경 설정 객체
+        dem_data=dem_data,
+        config=my_config,
+        precalc_moon_shield=moon_shield_deg,
+        max_radius_km=args.radius_km,
     )
     if final_radiance <= 0:
         print("simulation completed, but radiance is zero or negative. Check input angles/data.")
@@ -109,17 +141,21 @@ def main():
     mag = 12.59 - 2.5 * np.log10(final_radiance * 683)
     print("simulation completed.")
     print(f"Predicted magnitude: {mag:.2f}")
-
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run one interactive model prediction.")
+    add_data_args(parser, include_csv=False)
+    cli_args = parser.parse_args()
+
     while True:
         Q = input("프로그램을 실행하시겠습니까? (Y/N): ").strip().upper()
         
         if Q == 'Y':
             run_time = time.time()
-            main()  
+            main(cli_args)
             print(f"Total execution time: {time.time() - run_time:.2f} seconds")
         elif Q == 'N':
             print("프로그램을 종료합니다.")
             break
         else:
             print("Y 또는 N을 입력해주세요.\n")
+    

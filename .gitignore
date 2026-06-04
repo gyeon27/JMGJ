@@ -1,4 +1,13 @@
 test/
 **/__pycache__
+.env
+code/.env
 광공해/
 한반도/
+code/data/APIs/
+code/scripts/_lodo_*.csv
+code/data/lodo_params_*.json
+code/data/best_params.json
+code/data/component_residual_plots.png
+code/data/csv/ac_mag_train.csv
+code/data/csv/ac_mag_eval.csv
