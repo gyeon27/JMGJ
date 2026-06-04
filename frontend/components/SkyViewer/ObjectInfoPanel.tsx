@@ -25,19 +25,20 @@ function InfoGrid({ items }: { items: Array<[string, string]> }) {
 
 function PlanetPhasePreview({ fraction }: { fraction: number }) {
   const lit = Math.min(1, Math.max(0, fraction));
-  const controlX = 50 + (lit - 0.5) * 170;
-  const litPath =
-    lit >= 0.995
-      ? "M50 5a45 45 0 1 1 0 90a45 45 0 1 1 0-90"
-      : lit <= 0.005
-        ? ""
-        : `M50 5 A45 45 0 0 1 50 95 Q ${controlX.toFixed(1)} 50 50 5 Z`;
+  const shadow = 1 - lit;
+  const controlX = 50 + (shadow - 0.5) * 170;
+  const shadowPath =
+    shadow <= 0.005
+      ? ""
+      : shadow >= 0.995
+        ? "M50 5a45 45 0 1 1 0 90a45 45 0 1 1 0-90"
+        : `M50 5 A45 45 0 0 0 50 95 Q ${controlX.toFixed(1)} 50 50 5 Z`;
 
   return (
     <div className={styles.phasePreview} aria-label={`행성 조명률 ${(lit * 100).toFixed(1)}%`}>
       <svg viewBox="0 0 100 100" role="img" aria-hidden="true">
-        <circle cx="50" cy="50" r="45" className={styles.phaseDark} />
-        {litPath && <path d={litPath} className={styles.phaseLight} />}
+        <circle cx="50" cy="50" r="45" className={styles.phaseLight} />
+        {shadowPath && <path d={shadowPath} className={styles.phaseDark} />}
         <circle cx="50" cy="50" r="45" className={styles.phaseRim} />
       </svg>
       <span>{(lit * 100).toFixed(1)}%</span>

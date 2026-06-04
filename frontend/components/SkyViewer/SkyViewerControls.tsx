@@ -15,11 +15,6 @@ import type {
   SearchSuggestion,
 } from "./types";
 
-type TimeSpeed = {
-  label: string;
-  multiplier: number;
-};
-
 const MIN_PICKER_YEAR = 1;
 const MAX_PICKER_YEAR = 9999;
 
@@ -37,8 +32,7 @@ type SkyViewerControlsProps = {
   timeDraft: string;
   timeDraftDate: Date;
   timePickerMonth: Date;
-  timeSpeedIndex: number;
-  timeSpeeds: TimeSpeed[];
+  timeDirection: 1 | -1;
   toggles: DisplayToggles;
   weekdayLabels: string[];
   formatDisplayDateTime: (value: string) => string;
@@ -51,9 +45,10 @@ type SkyViewerControlsProps = {
   onQueryChange: (value: string) => void;
   onSearchSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSuggestionSelect: (suggestion: SearchSuggestion) => void;
-  onTimePauseToggle: () => void;
+  onTimeForwardStep: () => void;
+  onTimePlayPauseToggle: () => void;
+  onTimeReverseStep: () => void;
   onTimePickerMonthChange: (date: Date) => void;
-  onTimeSpeedChange: (index: number) => void;
   onToggle: (name: DisplayToggleName) => void;
   onUseCurrentTime: () => void;
 };
@@ -82,8 +77,7 @@ export function SkyViewerControls({
   timeDraft,
   timeDraftDate,
   timePickerMonth,
-  timeSpeedIndex,
-  timeSpeeds,
+  timeDirection,
   toggles,
   weekdayLabels,
   onApplyLocation,
@@ -95,9 +89,10 @@ export function SkyViewerControls({
   onQueryChange,
   onSearchSubmit,
   onSuggestionSelect,
-  onTimePauseToggle,
+  onTimeForwardStep,
+  onTimePlayPauseToggle,
+  onTimeReverseStep,
   onTimePickerMonthChange,
-  onTimeSpeedChange,
   onToggle,
   onUseCurrentTime,
 }: SkyViewerControlsProps) {
@@ -260,13 +255,53 @@ export function SkyViewerControls({
             <CalendarIcon />
             <span>{formatDisplayDateTime(timeDraft)}</span>
           </button>
-          <button
-            type="button"
-            onClick={onUseCurrentTime}
-            disabled={status !== "ready"}
-          >
-            현재시간
-          </button>
+          <div className={styles.timeTransportButtons} aria-label="시간 재생 방향">
+            <button
+              type="button"
+              className={!isTimePaused && timeDirection === -1 ? styles.active : ""}
+              onClick={onTimeReverseStep}
+              disabled={status !== "ready"}
+              aria-label="시간 역방향 재생"
+              aria-pressed={!isTimePaused && timeDirection === -1}
+              title="역방향"
+            >
+              <span className={styles.fastReverseIcon} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={!isTimePaused ? styles.active : ""}
+              onClick={onTimePlayPauseToggle}
+              disabled={status !== "ready"}
+              aria-label={isTimePaused ? "시간 재생" : "시간 정지"}
+              aria-pressed={!isTimePaused}
+              title={isTimePaused ? "재생" : "정지"}
+            >
+              <span
+                className={isTimePaused ? styles.playIcon : styles.pauseIcon}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              onClick={onUseCurrentTime}
+              disabled={status !== "ready"}
+              aria-label="현재시간"
+              title="현재시간"
+            >
+              <span className={styles.currentTimeIcon} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={!isTimePaused && timeDirection === 1 ? styles.active : ""}
+              onClick={onTimeForwardStep}
+              disabled={status !== "ready"}
+              aria-label="시간 정방향 재생"
+              aria-pressed={!isTimePaused && timeDirection === 1}
+              title="정방향"
+            >
+              <span className={styles.fastForwardIcon} aria-hidden="true" />
+            </button>
+          </div>
         </div>
         {isTimePickerOpen && (
           <section className={styles.timePicker} aria-label="시간 선택">
@@ -398,39 +433,6 @@ export function SkyViewerControls({
             </div>
           </section>
         )}
-      </div>
-
-      <div className={styles.timeControls} aria-label="시간 흐름 제어">
-        <label className={styles.speedField}>
-          <span>배속</span>
-          <select
-            value={timeSpeedIndex}
-            onChange={(event) => onTimeSpeedChange(Number(event.target.value))}
-            disabled={status !== "ready"}
-          >
-            {timeSpeeds.map((speed, index) => (
-              <option key={speed.label} value={index}>
-                {speed.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          className={[styles.timePauseButton, isTimePaused ? styles.active : ""]
-            .filter(Boolean)
-            .join(" ")}
-          onClick={onTimePauseToggle}
-          disabled={status !== "ready"}
-          aria-label={isTimePaused ? "시간 재생" : "시간 멈춤"}
-          aria-pressed={isTimePaused}
-          title={isTimePaused ? "시간 재생" : "시간 멈춤"}
-        >
-          <span
-            className={isTimePaused ? styles.playIcon : styles.pauseIcon}
-            aria-hidden="true"
-          />
-        </button>
       </div>
 
       <LocationPicker

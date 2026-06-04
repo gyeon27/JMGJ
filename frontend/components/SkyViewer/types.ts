@@ -62,6 +62,11 @@ export type ObserverLocation = {
   longitude: number;
 };
 
+export type TelescopeSettings = {
+  focalLengthMm: number;
+  apertureMm: number;
+};
+
 export type GeocodeResult = ObserverLocation & {
   name: string;
 };

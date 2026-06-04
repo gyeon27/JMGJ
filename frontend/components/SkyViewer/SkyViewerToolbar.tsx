@@ -1,4 +1,6 @@
+import { useState } from "react";
 import styles from "./SkyViewer.module.css";
+import type { TelescopeSettings } from "./types";
 
 export type DisplayToggleName =
   | "horizontalCoordinates"
@@ -13,12 +15,15 @@ type ToolbarIconName =
   | "horizontal"
   | "atmosphere"
   | "ground"
-  | "deepSky";
+  | "deepSky"
+  | "settings";
 
 type SkyViewerToolbarProps = {
   deepSkyMode: boolean;
+  telescopeSettings: TelescopeSettings;
   toggles: DisplayToggles;
   onDeepSkyModeToggle: () => void;
+  onTelescopeSettingsChange: (settings: TelescopeSettings) => void;
   onToggle: (name: DisplayToggleName) => void;
 };
 
@@ -63,6 +68,15 @@ function ToolbarIcon({ name }: { name: ToolbarIconName }) {
     );
   }
 
+  if (name === "settings") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <path d="M24.4 4h-.8a4 4 0 0 0-4 4v.3a4 4 0 0 1-2 3.5l-.8.4a4 4 0 0 1-4 0l-.3-.2a4 4 0 0 0-5.5 1.5l-.4.7a4 4 0 0 0 1.5 5.5l.3.2a4 4 0 0 1 2 3.5v1a4 4 0 0 1-2 3.5l-.3.2a4 4 0 0 0-1.5 5.5l.4.7a4 4 0 0 0 5.5 1.5l.3-.2a4 4 0 0 1 4 0l.8.4a4 4 0 0 1 2 3.5v.3a4 4 0 0 0 4 4h.8a4 4 0 0 0 4-4v-.3a4 4 0 0 1 2-3.5l.8-.4a4 4 0 0 1 4 0l.3.2a4 4 0 0 0 5.5-1.5l.4-.7a4 4 0 0 0-1.5-5.5l-.3-.2a4 4 0 0 1-2-3.5v-1a4 4 0 0 1 2-3.5l.3-.2a4 4 0 0 0 1.5-5.5l-.4-.7A4 4 0 0 0 35.5 12l-.3.2a4 4 0 0 1-4 0l-.8-.4a4 4 0 0 1-2-3.5V8a4 4 0 0 0-4-4Z" />
+        <circle cx="24" cy="24" r="6" />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 48 48" aria-hidden="true">
       <path d="M39 14c-5-7-17-8-25-1 8-2 13 0 16 4-7-3-17 0-21 9 6-5 13-5 18-2-7 0-14 6-14 15 4-6 10-9 17-8 7 1 12-3 14-9-4 4-8 5-13 4 6-2 9-6 8-12Z" />
@@ -72,10 +86,25 @@ function ToolbarIcon({ name }: { name: ToolbarIconName }) {
 
 export function SkyViewerToolbar({
   deepSkyMode,
+  telescopeSettings,
   toggles,
   onDeepSkyModeToggle,
+  onTelescopeSettingsChange,
   onToggle,
 }: SkyViewerToolbarProps) {
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  function updateTelescopeSetting(
+    key: keyof TelescopeSettings,
+    value: string
+  ) {
+    const parsed = Number(value);
+    onTelescopeSettingsChange({
+      ...telescopeSettings,
+      [key]: Number.isFinite(parsed) ? Math.max(1, parsed) : 1,
+    });
+  }
+
   return (
     <div className={styles.bottomToolbar} aria-label="Display toggles">
       <button
@@ -130,6 +159,52 @@ export function SkyViewerToolbar({
       >
         <ToolbarIcon name="deepSky" />
       </button>
+      <div className={styles.toolbarSettingsWrapper}>
+        <button
+          type="button"
+          className={[
+            styles.settingsToolbarButton,
+            isSettingsOpen ? styles.active : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          onClick={() => setIsSettingsOpen((current) => !current)}
+          aria-label="망원경 설정"
+          aria-expanded={isSettingsOpen}
+          title="망원경 설정"
+        >
+          <ToolbarIcon name="settings" />
+        </button>
+        {isSettingsOpen && (
+          <section className={styles.toolbarSettingsPanel} aria-label="망원경 설정">
+            <h2>망원경 설정</h2>
+            <label>
+              <span>초점거리(mm)</span>
+              <input
+                type="number"
+                min={1}
+                step={10}
+                value={telescopeSettings.focalLengthMm}
+                onChange={(event) =>
+                  updateTelescopeSetting("focalLengthMm", event.target.value)
+                }
+              />
+            </label>
+            <label>
+              <span>구경(mm)</span>
+              <input
+                type="number"
+                min={1}
+                step={5}
+                value={telescopeSettings.apertureMm}
+                onChange={(event) =>
+                  updateTelescopeSetting("apertureMm", event.target.value)
+                }
+              />
+            </label>
+          </section>
+        )}
+      </div>
     </div>
   );
 }

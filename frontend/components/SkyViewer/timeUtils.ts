@@ -19,10 +19,9 @@ export function parseDateTimeLocalValue(value: string) {
 
 export function formatDisplayDateTime(value: string) {
   const date = parseDateTimeLocalValue(value);
-  return `${date.getFullYear()}년 ${String(date.getMonth() + 1).padStart(
-    2,
-    "0"
-  )}월 ${String(date.getDate()).padStart(2, "0")}일 ${String(
+  return `${String(date.getFullYear()).slice(-2)}.${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")} ${String(
     date.getHours()
   ).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(
     date.getSeconds()

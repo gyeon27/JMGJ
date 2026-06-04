@@ -129,7 +129,6 @@
 .search,
 .field,
 .location,
-.timeControls,
 .buttonGrid {
   margin-top: 12px;
 }
@@ -257,7 +256,7 @@
   justify-content: center;
   height: 54px;
   max-width: calc(100vw - 24px);
-  overflow-x: auto;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
@@ -280,6 +279,75 @@
   padding: 0;
 }
 
+.toolbarSettingsWrapper {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.toolbarSettingsWrapper > button {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 52px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.55);
+  cursor: pointer;
+  padding: 0;
+}
+
+.toolbarSettingsPanel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  z-index: 8;
+  display: grid;
+  width: 260px;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 12, 24, 0.92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+  transform-origin: right bottom;
+}
+
+.toolbarSettingsPanel h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.toolbarSettingsPanel label {
+  display: grid;
+  gap: 6px;
+}
+
+.toolbarSettingsPanel span {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.toolbarSettingsPanel input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+  font: inherit;
+  outline: none;
+  padding: 0 10px;
+}
+
+.toolbarSettingsPanel input:focus {
+  border-color: #7dd3fc;
+}
+
 .bottomToolbar button:hover {
   color: rgba(248, 250, 252, 0.86);
   background: rgba(255, 255, 255, 0.08);
@@ -294,6 +362,11 @@
   width: 42px;
   height: 42px;
   display: block;
+}
+
+.bottomToolbar .settingsToolbarButton svg {
+  width: 32px;
+  height: 32px;
 }
 
 .bottomToolbar path {
@@ -315,18 +388,12 @@
   stroke: none;
 }
 
-.timeControls {
-  display: grid;
-  grid-template-columns: 1fr 42px;
-  gap: 8px;
-  align-items: end;
-}
-
 .timeField {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 88px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: center;
 }
 
 .timeInputButton {
@@ -345,6 +412,7 @@
   width: 18px;
   height: 18px;
   color: #bfdbfe;
+  margin-left: 3px;
 }
 
 .timeInputButton svg rect,
@@ -358,6 +426,7 @@
 
 .timeInputButton span {
   min-width: 0;
+  padding-left: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -486,23 +555,17 @@
   display: grid;
 }
 
-.speedField {
+.timeTransportButtons {
   display: grid;
+  grid-template-columns: repeat(4, 42px);
   gap: 6px;
-  min-width: 0;
 }
 
-.speedField span {
-  color: #cbd5e1;
-  font-size: 12px;
-}
-
-.timePauseButton {
+.timeTransportButtons button {
   display: grid;
   place-items: center;
   width: 42px;
   padding: 0;
-  border-radius: 999px;
 }
 
 .playIcon {
@@ -522,10 +585,84 @@
     linear-gradient(currentColor 0 0) right center / 5px 100% no-repeat;
 }
 
+.fastReverseIcon,
+.fastForwardIcon {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 18px;
+}
+
+.fastReverseIcon::before,
+.fastReverseIcon::after,
+.fastForwardIcon::before,
+.fastForwardIcon::after {
+  position: absolute;
+  top: 0;
+  width: 0;
+  height: 0;
+  content: "";
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+}
+
+.fastReverseIcon::before,
+.fastReverseIcon::after {
+  border-right: 11px solid currentColor;
+}
+
+.fastReverseIcon::before {
+  left: 0;
+}
+
+.fastReverseIcon::after {
+  left: 10px;
+}
+
+.fastForwardIcon::before,
+.fastForwardIcon::after {
+  border-left: 11px solid currentColor;
+}
+
+.fastForwardIcon::before {
+  left: 2px;
+}
+
+.fastForwardIcon::after {
+  left: 12px;
+}
+
+.currentTimeIcon {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 24px;
+}
+
+.currentTimeIcon::before,
+.currentTimeIcon::after {
+  position: absolute;
+  left: 3px;
+  width: 0;
+  height: 0;
+  content: "";
+  border-right: 8px solid transparent;
+  border-left: 8px solid transparent;
+}
+
+.currentTimeIcon::before {
+  top: 2px;
+  border-top: 9px solid currentColor;
+}
+
+.currentTimeIcon::after {
+  bottom: 2px;
+  border-bottom: 9px solid currentColor;
+}
+
 .search input,
 .field input,
-.location input,
-.speedField select {
+.location input {
   width: 100%;
   min-width: 0;
   height: 36px;
@@ -540,14 +677,8 @@
 
 .search input:focus,
 .field input:focus,
-.location input:focus,
-.speedField select:focus {
+.location input:focus {
   border-color: #7dd3fc;
-}
-
-.speedField select option {
-  background: #ffffff;
-  color: #0f172a;
 }
 
 .panel button {
@@ -971,7 +1102,6 @@
   .mapUtilityActions,
   .mapActions,
   .timeField,
-  .timeControls,
   .locationCoords {
     grid-template-columns: 1fr;
   }

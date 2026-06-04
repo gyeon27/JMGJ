@@ -173,6 +173,41 @@ function formatDegrees(value: number, signed = false) {
   return `${sign}${Math.abs(value).toFixed(2)}°`;
 }
 
+function formatArcSeconds(value: number) {
+  if (value >= 60) return `${(value / 60).toFixed(2)}'`;
+  return `${value.toFixed(1)}"`;
+}
+
+function formatAngularSize(radians: number | null) {
+  if (radians === null || radians <= 0) return "정보 없음";
+
+  const arcSeconds = (radians * 180 * 3600) / Math.PI;
+  if (arcSeconds >= 3600) return `${(arcSeconds / 3600).toFixed(2)}°`;
+  return formatArcSeconds(arcSeconds);
+}
+
+function formatAngularArea(radians: number | null) {
+  if (radians === null || radians <= 0) return "정보 없음";
+
+  const diameterArcMinutes = (radians * 180 * 60) / Math.PI;
+  const area = Math.PI * (diameterArcMinutes / 2) ** 2;
+  if (area >= 1) return `${area.toFixed(2)} arcmin²`;
+  return `${(area * 3600).toFixed(1)} arcsec²`;
+}
+
+function normalizeAngularSizeRadians(value: number | null) {
+  if (value === null || value <= 0) return null;
+
+  if (value > 360) return (value / 3600 / 180) * Math.PI;
+  if (value > Math.PI * 2) return (value / 180) * Math.PI;
+  return value;
+}
+
+function arcMinutesToRadians(value: number | null | undefined) {
+  if (value === undefined || value === null || value <= 0) return null;
+  return (value / 60 / 180) * Math.PI;
+}
+
 function formatRightAscension(degrees: number) {
   const totalSeconds = (normalizeDegrees(degrees) / 15) * 3600;
   const hours = Math.floor(totalSeconds / 3600);
@@ -259,9 +294,90 @@ type SupplementalObjectInfo = {
   distanceParsec?: number;
   absoluteMagnitude?: number;
   objectType?: string;
+  angularSizeArcMinutes?: number;
 };
 
 const SUPPLEMENTAL_OBJECT_INFO: Record<string, SupplementalObjectInfo> = {
+  "great orion nebula": {
+    distanceParsec: 412,
+    angularSizeArcMinutes: 65,
+    objectType: "성운",
+  },
+  "orion nebula": {
+    distanceParsec: 412,
+    angularSizeArcMinutes: 65,
+    objectType: "성운",
+  },
+  "m 42": {
+    distanceParsec: 412,
+    angularSizeArcMinutes: 65,
+    objectType: "성운",
+  },
+  "messier 42": {
+    distanceParsec: 412,
+    angularSizeArcMinutes: 65,
+    objectType: "성운",
+  },
+  "ngc 1976": {
+    distanceParsec: 412,
+    angularSizeArcMinutes: 65,
+    objectType: "성운",
+  },
+  "beehive cluster": {
+    distanceParsec: 187,
+    angularSizeArcMinutes: 95,
+    objectType: "산개성단",
+  },
+  praesepe: {
+    distanceParsec: 187,
+    angularSizeArcMinutes: 95,
+    objectType: "산개성단",
+  },
+  "m 44": {
+    distanceParsec: 187,
+    angularSizeArcMinutes: 95,
+    objectType: "산개성단",
+  },
+  "messier 44": {
+    distanceParsec: 187,
+    angularSizeArcMinutes: 95,
+    objectType: "산개성단",
+  },
+  "ngc 2632": {
+    distanceParsec: 187,
+    angularSizeArcMinutes: 95,
+    objectType: "산개성단",
+  },
+  pleiades: {
+    distanceParsec: 136,
+    angularSizeArcMinutes: 110,
+    objectType: "산개성단",
+  },
+  "m 45": {
+    distanceParsec: 136,
+    angularSizeArcMinutes: 110,
+    objectType: "산개성단",
+  },
+  "messier 45": {
+    distanceParsec: 136,
+    angularSizeArcMinutes: 110,
+    objectType: "산개성단",
+  },
+  "andromeda galaxy": {
+    distanceParsec: 765_000,
+    angularSizeArcMinutes: 190,
+    objectType: "은하",
+  },
+  "m 31": {
+    distanceParsec: 765_000,
+    angularSizeArcMinutes: 190,
+    objectType: "은하",
+  },
+  "messier 31": {
+    distanceParsec: 765_000,
+    angularSizeArcMinutes: 190,
+    objectType: "은하",
+  },
   "m 3": {
     distanceParsec: 10_400,
     objectType: "구상성단",
@@ -539,6 +655,8 @@ function buildPhysicalFields({
   phase,
   phaseAngle,
   elongation,
+  angularSize,
+  angularArea,
 }: {
   apparentMagnitude: string;
   absoluteMagnitude: string;
@@ -548,6 +666,8 @@ function buildPhysicalFields({
   phase: string;
   phaseAngle: string;
   elongation: string;
+  angularSize: string;
+  angularArea: string;
 }) {
   const fields: Array<[string, string]> = [];
 
@@ -555,6 +675,8 @@ function buildPhysicalFields({
   if (hasInfo(absoluteMagnitude)) fields.push(["절대 등급", absoluteMagnitude]);
   if (hasInfo(distanceText)) fields.push(["거리", distanceText]);
   if (hasInfo(distanceModulus)) fields.push(["거리계수", distanceModulus]);
+  if (hasInfo(angularSize)) fields.push(["겉보기 크기", angularSize]);
+  if (hasInfo(angularArea)) fields.push(["시면적", angularArea]);
   if (hasInfo(elongation)) fields.push(["태양 이각", elongation]);
   if (hasInfo(phaseAngle)) fields.push(["위상각", phaseAngle]);
   if (hasInfo(phase)) fields.push(["조명률", phase]);
@@ -665,6 +787,24 @@ export function getObjectInfo(
     ),
     elongation
   );
+  const angularSizeRadians = normalizeAngularSizeRadians(
+    getInfoNumber(
+      target,
+      observer,
+      [
+        "angular-size",
+        "angular_size",
+        "angularDiameter",
+        "angular_diameter",
+        "sdiam",
+        "diameter",
+        "size",
+      ],
+      infoMap
+    )
+  ) ?? arcMinutesToRadians(supplementalInfo?.angularSizeArcMinutes);
+  const angularSizeText = formatAngularSize(angularSizeRadians);
+  const angularAreaText = formatAngularArea(angularSizeRadians);
 
   return {
     name: label,
@@ -688,6 +828,8 @@ export function getObjectInfo(
       phase: phaseText,
       phaseAngle: phaseAngleText,
       elongation: elongationText,
+      angularSize: angularSizeText,
+      angularArea: angularAreaText,
     }),
   };
 }

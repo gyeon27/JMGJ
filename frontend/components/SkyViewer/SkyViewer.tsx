@@ -62,6 +62,7 @@ import type {
   SelectedTarget,
   StellariumEngine,
   SweObj,
+  TelescopeSettings,
 } from "./types";
 
 const SEOUL = {
@@ -74,12 +75,18 @@ const SEOUL = {
 const TIME_DISPLAY_UPDATE_INTERVAL_MS = 250;
 
 const TIME_SPEEDS = [
-  { label: "1x", multiplier: 1 },
-  { label: "5x", multiplier: 5 },
-  { label: "10x", multiplier: 10 },
-  { label: "100x", multiplier: 100 },
-  { label: "1000x", multiplier: 1000 },
+  { label: "실시간", multiplier: 1 },
+  { label: "초 12배", multiplier: 12 },
+  { label: "초 60배", multiplier: 60 },
+  { label: "분 12배", multiplier: 60 * 12 },
+  { label: "분 60배", multiplier: 60 * 60 },
+  { label: "시 12배", multiplier: 60 * 60 * 12 },
 ];
+
+const DEFAULT_TELESCOPE_SETTINGS: TelescopeSettings = {
+  focalLengthMm: 1000,
+  apertureMm: 100,
+};
 
 const DEEP_SKY_IMAGE_FOV = 8 * DEG_TO_RAD;
 
@@ -450,6 +457,9 @@ export default function SkyViewer() {
     () => parseDateTimeLocalValue(DEFAULT_TIME)
   );
   const [timeSpeedIndex, setTimeSpeedIndex] = useState(0);
+  const [timeDirection, setTimeDirection] = useState<1 | -1>(1);
+  const [telescopeSettings, setTelescopeSettings] =
+    useState<TelescopeSettings>(DEFAULT_TELESCOPE_SETTINGS);
   const [deepSkyMode, setDeepSkyMode] = useState(false);
   const [locationQuery, setLocationQuery] = useState(SEOUL.name);
   const [observerLocation, setObserverLocationState] =
@@ -614,7 +624,9 @@ export default function SkyViewer() {
     }
     addPlanetSurveyIfNeeded(engine, label, loadedPlanetSurveysRef.current);
     setQuery(label);
-    setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
+    setSelectedInfo(
+      getSafeObjectInfo(engine, target, label, vector)
+    );
     centerTargetOnce(engine, target, vector);
     trackingActivationTimeoutRef.current = window.setTimeout(() => {
       trackingTargetRef.current = nextTarget;
@@ -632,7 +644,9 @@ export default function SkyViewer() {
     cancelTargetTracking();
     addPlanetSurveyIfNeeded(engine, label, loadedPlanetSurveysRef.current);
     setQuery(label);
-    setSelectedInfo(getSafeObjectInfo(engine, target, label, vector));
+    setSelectedInfo(
+      getSafeObjectInfo(engine, target, label, vector)
+    );
     setSuggestions([]);
   }
 
@@ -870,9 +884,18 @@ export default function SkyViewer() {
     if (!engine || !selected) return;
 
     setSelectedInfo(
-      getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
+      getSafeObjectInfo(
+        engine,
+        selected.obj,
+        selected.label,
+        selected.vector
+      )
     );
   }, []);
+
+  useEffect(() => {
+    updateSelectedInfo();
+  }, [updateSelectedInfo]);
 
   const applyObservationTime = useCallback((value: string | Date) => {
     const engine = engineRef.current;
@@ -904,7 +927,7 @@ export default function SkyViewer() {
       const speed = TIME_SPEEDS[timeSpeedIndex] ?? TIME_SPEEDS[0];
       simulatedTimeRef.current = new Date(
         simulatedTimeRef.current.getTime() +
-          elapsedSeconds * speed.multiplier * 1000
+          elapsedSeconds * speed.multiplier * timeDirection * 1000
       );
 
       applyObservationTime(simulatedTimeRef.current);
@@ -943,6 +966,7 @@ export default function SkyViewer() {
     observerLocation,
     status,
     timeSpeedIndex,
+    timeDirection,
     updateSelectedInfo,
   ]);
 
@@ -1042,9 +1066,32 @@ export default function SkyViewer() {
     }
   }
 
-  function handleTimePauseToggle() {
+  function handleTimePlayPauseToggle() {
     lastTickRef.current = performance.now();
     setIsTimePaused((current) => !current);
+  }
+
+  function stepTimeSpeed(direction: 1 | -1) {
+    lastTickRef.current = performance.now();
+    setTimeSpeedIndex((current) =>
+      !isTimePaused && timeDirection === direction
+        ? (current + 1) % TIME_SPEEDS.length
+        : current
+    );
+    setTimeDirection(direction);
+    setIsTimePaused(false);
+  }
+
+  function handleTimeForwardStep() {
+    stepTimeSpeed(1);
+  }
+
+  function handleTimeReverseStep() {
+    stepTimeSpeed(-1);
+  }
+
+  function handleTelescopeSettingsChange(nextSettings: TelescopeSettings) {
+    setTelescopeSettings(nextSettings);
   }
 
   function handleApplyLocation(location: ObserverLocation, name?: string) {
@@ -1062,7 +1109,12 @@ export default function SkyViewer() {
     const selected = selectedTargetRef.current;
     if (selected) {
       setSelectedInfo(
-        getSafeObjectInfo(engine, selected.obj, selected.label, selected.vector)
+        getSafeObjectInfo(
+          engine,
+          selected.obj,
+          selected.label,
+          selected.vector
+        )
       );
     }
 
@@ -1107,8 +1159,7 @@ export default function SkyViewer() {
           timeDraft={timeDraft}
           timeDraftDate={timeDraftDate}
           timePickerMonth={timePickerMonth}
-          timeSpeedIndex={timeSpeedIndex}
-          timeSpeeds={TIME_SPEEDS}
+          timeDirection={timeDirection}
           toggles={toggles}
           weekdayLabels={WEEKDAY_LABELS}
           onApplyLocation={handleApplyLocation}
@@ -1120,9 +1171,10 @@ export default function SkyViewer() {
           onQueryChange={updateQuery}
           onSearchSubmit={handleSearch}
           onSuggestionSelect={focusSuggestion}
-          onTimePauseToggle={handleTimePauseToggle}
+          onTimeForwardStep={handleTimeForwardStep}
+          onTimePlayPauseToggle={handleTimePlayPauseToggle}
+          onTimeReverseStep={handleTimeReverseStep}
           onTimePickerMonthChange={setTimePickerMonth}
-          onTimeSpeedChange={setTimeSpeedIndex}
           onToggle={handleToggle}
           onUseCurrentTime={handleUseCurrentTime}
         />
@@ -1130,8 +1182,10 @@ export default function SkyViewer() {
 
       <SkyViewerToolbar
         deepSkyMode={deepSkyMode}
+        telescopeSettings={telescopeSettings}
         toggles={toggles}
         onDeepSkyModeToggle={handleDeepSkyModeToggle}
+        onTelescopeSettingsChange={handleTelescopeSettingsChange}
         onToggle={handleToggle}
       />
 
