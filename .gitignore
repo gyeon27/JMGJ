@@ -53,3 +53,24 @@ venv/
 
 # python env
 .env
+
+# local geospatial/model assets
+*.h5
+*.hdf5
+*.img
+*.tif
+*.tiff
+*.vrt
+*.ovr
+*.aux.xml
+*.npy
+*.npz
+*.grd
+*.nc
+*.mbtiles
+*.sqlite
+*.db
+backend/src/app/services/sky_brightness_model/data/APIs/weather_cache*.json
+backend/src/app/services/sky_brightness_model/data/black_marble/
+backend/src/app/services/sky_brightness_model/data/dem/
+code/data/APIs/weather_cache*.json

@@ -13,7 +13,9 @@ import {
   getObjectInfo,
   getTargetVector,
   projectTargetToScreen,
+  setDeepSkySupplementIndex,
 } from "./coordinates";
+import { loadDeepSkySupplementCatalog } from "./deepSkyCatalog";
 import {
   DEG_TO_RAD,
   TOGGLE_PATHS,
@@ -45,6 +47,7 @@ import {
   loadBrightStarCatalog,
   normalizeSearchKey,
   titleCaseName,
+  updateVisibleStarCatalog,
 } from "./skyCatalog";
 import {
   DEFAULT_TIME,
@@ -54,6 +57,11 @@ import {
   parseDateTimeLocalValue,
   toDateTimeLocalValue,
 } from "./timeUtils";
+import {
+  getFallbackSkyBrightness,
+  getSkyBrightnessDetails,
+} from "./difficulty";
+import type { SkyBrightnessDirection } from "./difficulty";
 import type {
   EngineStatus,
   ObjectInfo,
@@ -73,6 +81,7 @@ const SEOUL = {
 };
 
 const TIME_DISPLAY_UPDATE_INTERVAL_MS = 250;
+const SKY_BRIGHTNESS_DIRECTION_STEP_DEGREES = 2;
 
 const TIME_SPEEDS = [
   { label: "실시간", multiplier: 1 },
@@ -87,6 +96,50 @@ const DEFAULT_TELESCOPE_SETTINGS: TelescopeSettings = {
   focalLengthMm: 1000,
   apertureMm: 100,
 };
+
+const TELESCOPE_SETTINGS_STORAGE_KEY = "jmgj:telescope-settings";
+
+function readStoredTelescopeSettings(): TelescopeSettings {
+  if (typeof window === "undefined") return DEFAULT_TELESCOPE_SETTINGS;
+
+  try {
+    const raw = window.localStorage.getItem(TELESCOPE_SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_TELESCOPE_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<TelescopeSettings>;
+    const focalLengthMm = Number(parsed.focalLengthMm);
+    const apertureMm = Number(parsed.apertureMm);
+    return {
+      focalLengthMm:
+        Number.isFinite(focalLengthMm) && focalLengthMm > 0
+          ? focalLengthMm
+          : DEFAULT_TELESCOPE_SETTINGS.focalLengthMm,
+      apertureMm:
+        Number.isFinite(apertureMm) && apertureMm > 0
+          ? apertureMm
+          : DEFAULT_TELESCOPE_SETTINGS.apertureMm,
+    };
+  } catch {
+    return DEFAULT_TELESCOPE_SETTINGS;
+  }
+}
+
+function quantizeSkyBrightnessDirection(
+  direction: SkyBrightnessDirection
+): SkyBrightnessDirection {
+  const step = SKY_BRIGHTNESS_DIRECTION_STEP_DEGREES;
+  return {
+    altitude: Math.round((direction.altitude ?? 0) / step) * step,
+    azimuth: (((Math.round((direction.azimuth ?? 0) / step) * step) % 360) + 360) % 360,
+  };
+}
+
+function saveStoredTelescopeSettings(settings: TelescopeSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    TELESCOPE_SETTINGS_STORAGE_KEY,
+    JSON.stringify(settings)
+  );
+}
 
 const DEEP_SKY_IMAGE_FOV = 8 * DEG_TO_RAD;
 
@@ -355,16 +408,94 @@ function getSafeObjectInfo(
   engine: StellariumEngine,
   target: SweObj,
   label: string,
-  vector?: number[]
+  vector: number[] | undefined,
+  skyBrightness: number,
+  telescopeApertureMm: number,
+  seeingArcsec?: number | null,
+  daylight?: boolean
 ) {
   try {
-    return getObjectInfo(engine, target, label, vector);
+    return getObjectInfo(engine, target, label, vector, {
+      skyBrightness,
+      telescopeApertureMm,
+      seeingArcsec,
+      daylight,
+    });
   } catch (error) {
     console.warn("Could not read object info", error);
     return null;
   }
 }
 
+function isSunAboveHorizon(engine: StellariumEngine) {
+  const observer = engine.observer;
+  const sun = findEngineObject(engine, "Sun");
+  if (!observer || !sun || !engine.convertFrame) return false;
+
+  const vector = getTargetVector(sun, observer);
+  if (!vector) return false;
+
+  const observedVector = engine.convertFrame(observer, "ICRF", "OBSERVED", vector);
+  const radius = Math.hypot(
+    observedVector[0] ?? 0,
+    observedVector[1] ?? 0,
+    observedVector[2] ?? 0
+  );
+  if (!Number.isFinite(radius) || radius <= 0) return false;
+
+  return Math.asin((observedVector[2] ?? 0) / radius) > 0;
+}
+
+function CalculationInfoPanel({
+  fields,
+  isSkyBrightnessLoading,
+}: {
+  fields: Array<[string, string]>;
+  isSkyBrightnessLoading: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const skyBrightnessLabel = "\uC0AC\uC6A9\uB41C \uD558\uB298 \uBC1D\uAE30";
+  const visibleFields = fields.filter(([label]) =>
+    [
+      skyBrightnessLabel,
+      "\uB9DD\uC6D0\uACBD \uD55C\uACC4 \uB4F1\uAE09",
+      "\uC2DC\uC0C1",
+    ].includes(label)
+  );
+  if (visibleFields.length === 0) return null;
+
+  return (
+    <aside className={styles.calculationPanel} aria-label="\uACC4\uC0B0 \uAE30\uC900">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        aria-expanded={isOpen}
+      >
+        <span className={styles.calculationTitle}>
+          {"\uACC4\uC0B0 \uAE30\uC900"}
+          {isSkyBrightnessLoading && (
+            <span
+              className={styles.calculationSpinner}
+              aria-label="\uD558\uB298 \uBC1D\uAE30 \uAC31\uC2E0 \uC911"
+              title="\uD558\uB298 \uBC1D\uAE30 \uAC31\uC2E0 \uC911"
+            />
+          )}
+        </span>
+        <span>{isOpen ? "\uC811\uAE30" : "\uD3BC\uCE58\uAE30"}</span>
+      </button>
+      {isOpen && (
+        <dl>
+          {visibleFields.map(([label, value]) => (
+            <div key={`${label}:${value}`}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </aside>
+  );
+}
 function releaseTracking(engine: StellariumEngine) {
   trySetAllValues(
     engine,
@@ -439,6 +570,9 @@ export default function SkyViewer() {
   const simulatedTimeRef = useRef(new Date());
   const lastTickRef = useRef<number | null>(null);
   const lastTimeDisplayUpdateRef = useRef<number | null>(null);
+  const lastStarCatalogUpdateRef = useRef<number | null>(null);
+  const skyBrightnessRequestKeyRef = useRef("");
+  const isSkyViewerMountedRef = useRef(false);
   const dragStateRef = useRef({
     x: 0,
     y: 0,
@@ -459,7 +593,14 @@ export default function SkyViewer() {
   const [timeSpeedIndex, setTimeSpeedIndex] = useState(0);
   const [timeDirection, setTimeDirection] = useState<1 | -1>(1);
   const [telescopeSettings, setTelescopeSettings] =
-    useState<TelescopeSettings>(DEFAULT_TELESCOPE_SETTINGS);
+    useState<TelescopeSettings>(() => readStoredTelescopeSettings());
+  const [skyBrightness, setSkyBrightness] = useState(() =>
+    getFallbackSkyBrightness(SEOUL.latitude, SEOUL.longitude)
+  );
+  const [seeingArcsec, setSeeingArcsec] = useState<number | null>(null);
+  const [isSkyBrightnessLoading, setIsSkyBrightnessLoading] = useState(false);
+  const [skyBrightnessDirection, setSkyBrightnessDirection] =
+    useState<SkyBrightnessDirection | null>(null);
   const [deepSkyMode, setDeepSkyMode] = useState(false);
   const [locationQuery, setLocationQuery] = useState(SEOUL.name);
   const [observerLocation, setObserverLocationState] =
@@ -474,6 +615,28 @@ export default function SkyViewer() {
     ground: true,
   });
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
+  const applySelectedInfo = useCallback((info: ObjectInfo | null) => {
+    setSelectedInfo(info);
+    setSkyBrightnessDirection((current) => {
+      const next = info
+        ? quantizeSkyBrightnessDirection({
+            altitude: info.altitudeDegrees,
+            azimuth: info.azimuthDegrees,
+          })
+        : null;
+
+      if (!current && !next) return current;
+      if (current && next) {
+        const sameAltitude =
+          Math.abs((current.altitude ?? 0) - (next.altitude ?? 0)) < 0.001;
+        const sameAzimuth =
+          Math.abs((current.azimuth ?? 0) - (next.azimuth ?? 0)) < 0.001;
+        if (sameAltitude && sameAzimuth) return current;
+      }
+
+      return next;
+    });
+  }, []);
 
   const statusText = useMemo(() => {
     if (status === "ready") return "엔진 연결됨";
@@ -488,6 +651,18 @@ export default function SkyViewer() {
     () => getCalendarDays(timePickerMonth),
     [timePickerMonth]
   );
+  const skyBrightnessTimeKey = useMemo(() => {
+    const datetime = parseDateTimeLocalValue(timeDraft);
+    datetime.setMinutes(0, 0, 0);
+    return datetime.toISOString();
+  }, [timeDraft]);
+
+  useEffect(() => {
+    isSkyViewerMountedRef.current = true;
+    return () => {
+      isSkyViewerMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -538,6 +713,12 @@ export default function SkyViewer() {
           clickTargetsRef.current
         );
         setStatus("ready");
+
+        try {
+          setDeepSkySupplementIndex(await loadDeepSkySupplementCatalog());
+        } catch (error) {
+          console.warn("Deep-sky supplement catalog was not loaded", error);
+        }
 
         await loadBrightStarCatalog(
           engine,
@@ -624,8 +805,17 @@ export default function SkyViewer() {
     }
     addPlanetSurveyIfNeeded(engine, label, loadedPlanetSurveysRef.current);
     setQuery(label);
-    setSelectedInfo(
-      getSafeObjectInfo(engine, target, label, vector)
+    applySelectedInfo(
+      getSafeObjectInfo(
+        engine,
+        target,
+        label,
+        vector,
+        skyBrightness,
+        telescopeSettings.apertureMm,
+        seeingArcsec,
+        isSunAboveHorizon(engine)
+      )
     );
     centerTargetOnce(engine, target, vector);
     trackingActivationTimeoutRef.current = window.setTimeout(() => {
@@ -644,8 +834,17 @@ export default function SkyViewer() {
     cancelTargetTracking();
     addPlanetSurveyIfNeeded(engine, label, loadedPlanetSurveysRef.current);
     setQuery(label);
-    setSelectedInfo(
-      getSafeObjectInfo(engine, target, label, vector)
+    applySelectedInfo(
+      getSafeObjectInfo(
+        engine,
+        target,
+        label,
+        vector,
+        skyBrightness,
+        telescopeSettings.apertureMm,
+        seeingArcsec,
+        isSunAboveHorizon(engine)
+      )
     );
     setSuggestions([]);
   }
@@ -653,7 +852,7 @@ export default function SkyViewer() {
   function clearSelectedTarget() {
     const engine = engineRef.current;
     selectedTargetRef.current = null;
-    setSelectedInfo(null);
+    applySelectedInfo(null);
     cancelTargetTracking();
     setSuggestions([]);
     if (engine) {
@@ -883,19 +1082,69 @@ export default function SkyViewer() {
     const selected = selectedTargetRef.current;
     if (!engine || !selected) return;
 
-    setSelectedInfo(
+    applySelectedInfo(
       getSafeObjectInfo(
         engine,
         selected.obj,
         selected.label,
-        selected.vector
+        selected.vector,
+        skyBrightness,
+        telescopeSettings.apertureMm,
+        seeingArcsec,
+        isSunAboveHorizon(engine)
       )
     );
-  }, []);
+  }, [applySelectedInfo, seeingArcsec, skyBrightness, telescopeSettings.apertureMm]);
 
   useEffect(() => {
     updateSelectedInfo();
   }, [updateSelectedInfo]);
+
+  useEffect(() => {
+    let disposed = false;
+    const datetime = new Date(skyBrightnessTimeKey);
+    const locationKey = `${observerLocation.latitude.toFixed(
+      6
+    )},${observerLocation.longitude.toFixed(6)}`;
+    const directionKey = skyBrightnessDirection
+      ? `${skyBrightnessDirection.altitude?.toFixed(3) ?? ""},${
+          skyBrightnessDirection.azimuth?.toFixed(3) ?? ""
+        }`
+      : "none";
+    const requestKey = `${locationKey}|${skyBrightnessTimeKey}|${directionKey}`;
+    skyBrightnessRequestKeyRef.current = requestKey;
+    setIsSkyBrightnessLoading(true);
+
+    void getSkyBrightnessDetails(
+      observerLocation.latitude,
+      observerLocation.longitude,
+      datetime,
+      skyBrightnessDirection ?? undefined
+    )
+      .then((details) => {
+        if (!disposed && skyBrightnessRequestKeyRef.current === requestKey) {
+          setSkyBrightness(details.sqm);
+          setSeeingArcsec(details.seeingArcsec);
+        }
+      })
+      .finally(() => {
+        if (
+          isSkyViewerMountedRef.current &&
+          skyBrightnessRequestKeyRef.current === requestKey
+        ) {
+          setIsSkyBrightnessLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    observerLocation.latitude,
+    observerLocation.longitude,
+    skyBrightnessDirection,
+    skyBrightnessTimeKey,
+  ]);
 
   const applyObservationTime = useCallback((value: string | Date) => {
     const engine = engineRef.current;
@@ -919,6 +1168,13 @@ export default function SkyViewer() {
       const elapsedSeconds = (now - lastTick) / 1000;
       lastTickRef.current = now;
 
+      const engine = engineRef.current;
+      const lastStarCatalogUpdate = lastStarCatalogUpdateRef.current ?? 0;
+      if (engine && now - lastStarCatalogUpdate >= 600) {
+        lastStarCatalogUpdateRef.current = now;
+        updateVisibleStarCatalog(engine, clickTargetsRef.current);
+      }
+
       if (isTimePaused) {
         frameId = window.requestAnimationFrame(tick);
         return;
@@ -932,7 +1188,6 @@ export default function SkyViewer() {
 
       applyObservationTime(simulatedTimeRef.current);
       const trackingTarget = trackingTargetRef.current;
-      const engine = engineRef.current;
       if (engine && trackingTarget) {
         centerTarget(engine, trackingTarget.obj, trackingTarget.vector, 0, false);
       }
@@ -956,6 +1211,7 @@ export default function SkyViewer() {
     return () => {
       lastTickRef.current = null;
       lastTimeDisplayUpdateRef.current = null;
+      lastStarCatalogUpdateRef.current = null;
       window.cancelAnimationFrame(frameId);
     };
   }, [
@@ -1094,6 +1350,10 @@ export default function SkyViewer() {
     setTelescopeSettings(nextSettings);
   }
 
+  function handleTelescopeSettingsSave() {
+    saveStoredTelescopeSettings(telescopeSettings);
+  }
+
   function handleApplyLocation(location: ObserverLocation, name?: string) {
     const engine = engineRef.current;
     if (!engine) return false;
@@ -1108,12 +1368,16 @@ export default function SkyViewer() {
 
     const selected = selectedTargetRef.current;
     if (selected) {
-      setSelectedInfo(
+      applySelectedInfo(
         getSafeObjectInfo(
           engine,
           selected.obj,
           selected.label,
-          selected.vector
+          selected.vector,
+          skyBrightness,
+          telescopeSettings.apertureMm,
+          seeingArcsec,
+          isSunAboveHorizon(engine)
         )
       );
     }
@@ -1185,10 +1449,15 @@ export default function SkyViewer() {
         telescopeSettings={telescopeSettings}
         toggles={toggles}
         onDeepSkyModeToggle={handleDeepSkyModeToggle}
+        onTelescopeSettingsSave={handleTelescopeSettingsSave}
         onTelescopeSettingsChange={handleTelescopeSettingsChange}
         onToggle={handleToggle}
       />
 
+      <CalculationInfoPanel
+        fields={selectedInfo?.calculationFields ?? []}
+        isSkyBrightnessLoading={isSkyBrightnessLoading}
+      />
       <ObjectInfoPanel info={selectedInfo} />
     </main>
   );

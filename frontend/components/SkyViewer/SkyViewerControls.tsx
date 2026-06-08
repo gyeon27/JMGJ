@@ -182,7 +182,7 @@ export function SkyViewerControls({
   }
 
   return (
-    <section className={styles.panel} aria-label="Stellarium controls">
+    <section className={styles.panel} aria-label="관측 하늘 조작 패널">
       <div className={styles.header}>
         <div>
           <p className={styles.kicker}>Stellarium Web Engine</p>
@@ -285,8 +285,8 @@ export function SkyViewerControls({
               type="button"
               onClick={onUseCurrentTime}
               disabled={status !== "ready"}
-              aria-label="현재시간"
-              title="현재시간"
+              aria-label="현재 시간"
+              title="현재 시간"
             >
               <span className={styles.currentTimeIcon} aria-hidden="true" />
             </button>
@@ -442,7 +442,7 @@ export function SkyViewerControls({
         onApply={onApplyLocation}
       />
 
-      <div className={styles.buttonGrid} aria-label="Display toggles">
+      <div className={styles.buttonGrid} aria-label="표시 옵션">
         <button
           type="button"
           className={toggles.horizontalCoordinates ? styles.active : ""}

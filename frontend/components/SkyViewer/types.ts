@@ -76,6 +76,8 @@ export type ObjectInfo = {
   aliases: string[];
   altitude: string;
   azimuth: string;
+  altitudeDegrees: number;
+  azimuthDegrees: number;
   rightAscension: string;
   declination: string;
   apparentMagnitude: string;
@@ -84,18 +86,24 @@ export type ObjectInfo = {
   distanceModulus: string;
   objectType: string;
   physicalFields: Array<[string, string]>;
+  calculationFields: Array<[string, string]>;
   phaseFraction: number | null;
 };
 
 export type BrightStar = {
-  hr: number;
+  id?: number;
+  hip?: number | null;
+  hr: number | null;
   hd: number | null;
   name: string;
   names: string[];
   ra: number;
   dec: number;
   vmag: number;
+  absoluteMagnitude?: number | null;
+  distanceParsec?: number | null;
   spect: string;
+  colorIndex?: number | null;
 };
 
 export type RenderStar = Pick<

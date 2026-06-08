@@ -1,3 +1,8 @@
 fastapi
 uvicorn
 httpx
+numpy
+requests
+h5py
+rasterio
+numba

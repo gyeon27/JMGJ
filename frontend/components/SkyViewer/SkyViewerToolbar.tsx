@@ -16,6 +16,7 @@ type ToolbarIconName =
   | "atmosphere"
   | "ground"
   | "deepSky"
+  | "difficultyInfo"
   | "settings";
 
 type SkyViewerToolbarProps = {
@@ -23,6 +24,7 @@ type SkyViewerToolbarProps = {
   telescopeSettings: TelescopeSettings;
   toggles: DisplayToggles;
   onDeepSkyModeToggle: () => void;
+  onTelescopeSettingsSave: () => void;
   onTelescopeSettingsChange: (settings: TelescopeSettings) => void;
   onToggle: (name: DisplayToggleName) => void;
 };
@@ -77,6 +79,16 @@ function ToolbarIcon({ name }: { name: ToolbarIconName }) {
     );
   }
 
+  if (name === "difficultyInfo") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="17" />
+        <path d="M24 21v12" />
+        <circle cx="24" cy="15" r="1.8" />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 48 48" aria-hidden="true">
       <path d="M39 14c-5-7-17-8-25-1 8-2 13 0 16 4-7-3-17 0-21 9 6-5 13-5 18-2-7 0-14 6-14 15 4-6 10-9 17-8 7 1 12-3 14-9-4 4-8 5-13 4 6-2 9-6 8-12Z" />
@@ -89,10 +101,13 @@ export function SkyViewerToolbar({
   telescopeSettings,
   toggles,
   onDeepSkyModeToggle,
+  onTelescopeSettingsSave,
   onTelescopeSettingsChange,
   onToggle,
 }: SkyViewerToolbarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isDifficultyInfoOpen, setIsDifficultyInfoOpen] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
 
   function updateTelescopeSetting(
     key: keyof TelescopeSettings,
@@ -103,10 +118,16 @@ export function SkyViewerToolbar({
       ...telescopeSettings,
       [key]: Number.isFinite(parsed) ? Math.max(1, parsed) : 1,
     });
+    setSaveState("idle");
+  }
+
+  function saveTelescopeSettings() {
+    onTelescopeSettingsSave();
+    setSaveState("saved");
   }
 
   return (
-    <div className={styles.bottomToolbar} aria-label="Display toggles">
+    <div className={styles.bottomToolbar} aria-label="표시 옵션">
       <button
         type="button"
         className={toggles.constellationLines ? styles.active : ""}
@@ -121,9 +142,7 @@ export function SkyViewerToolbar({
         type="button"
         className={toggles.horizontalCoordinates ? styles.active : ""}
         onClick={() => onToggle("horizontalCoordinates")}
-        aria-label={`지평좌표 ${
-          toggles.horizontalCoordinates ? "끄기" : "켜기"
-        }`}
+        aria-label={`지평좌표 ${toggles.horizontalCoordinates ? "끄기" : "켜기"}`}
         aria-pressed={toggles.horizontalCoordinates}
         title={`지평좌표 ${toggles.horizontalCoordinates ? "끄기" : "켜기"}`}
       >
@@ -159,6 +178,53 @@ export function SkyViewerToolbar({
       >
         <ToolbarIcon name="deepSky" />
       </button>
+      <div className={styles.toolbarSettingsWrapper}>
+        <button
+          type="button"
+          className={[
+            styles.settingsToolbarButton,
+            isDifficultyInfoOpen ? styles.active : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          onClick={() => setIsDifficultyInfoOpen((current) => !current)}
+          aria-label="관측 난이도 설명"
+          aria-expanded={isDifficultyInfoOpen}
+          title="관측 난이도 설명"
+        >
+          <ToolbarIcon name="difficultyInfo" />
+        </button>
+        {isDifficultyInfoOpen && (
+          <section
+            className={styles.toolbarDifficultyPanel}
+            aria-label="관측 난이도 설명"
+          >
+            <h2>난이도 설명</h2>
+            <ol>
+              <li>
+                <strong>1단계</strong>
+                <span>안시 관측 가능</span>
+              </li>
+              <li>
+                <strong>2단계</strong>
+                <span>망원경 안시 관측 가능</span>
+              </li>
+              <li>
+                <strong>3단계</strong>
+                <span>망원경 촬영 가능</span>
+              </li>
+              <li>
+                <strong>4단계</strong>
+                <span>필터 등 특수 장비 필요</span>
+              </li>
+              <li>
+                <strong>5단계</strong>
+                <span>현재 조건에서 관측 불가</span>
+              </li>
+            </ol>
+          </section>
+        )}
+      </div>
       <div className={styles.toolbarSettingsWrapper}>
         <button
           type="button"
@@ -202,6 +268,13 @@ export function SkyViewerToolbar({
                 }
               />
             </label>
+            <button
+              type="button"
+              className={styles.toolbarSaveButton}
+              onClick={saveTelescopeSettings}
+            >
+              {saveState === "saved" ? "저장됨" : "상태 저장"}
+            </button>
           </section>
         )}
       </div>

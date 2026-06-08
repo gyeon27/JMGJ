@@ -5,16 +5,16 @@ import type { ObjectInfo } from "./types";
 type InfoTab = "position" | "names" | "photometry";
 
 const INFO_TABS: Array<{ id: InfoTab; label: string }> = [
-  { id: "position", label: "위치" },
-  { id: "names", label: "이름" },
-  { id: "photometry", label: "정보" },
+  { id: "position", label: "\uC704\uCE58" },
+  { id: "names", label: "\uC774\uB984" },
+  { id: "photometry", label: "\uC815\uBCF4" },
 ];
 
 function InfoGrid({ items }: { items: Array<[string, string]> }) {
   return (
     <dl>
       {items.map(([label, value]) => (
-        <div key={label}>
+        <div key={`${label}:${value}`}>
           <dt>{label}</dt>
           <dd>{value}</dd>
         </div>
@@ -35,7 +35,10 @@ function PlanetPhasePreview({ fraction }: { fraction: number }) {
         : `M50 5 A45 45 0 0 0 50 95 Q ${controlX.toFixed(1)} 50 50 5 Z`;
 
   return (
-    <div className={styles.phasePreview} aria-label={`행성 조명률 ${(lit * 100).toFixed(1)}%`}>
+    <div
+      className={styles.phasePreview}
+      aria-label={`\uD589\uC131 \uC870\uBA85\uB960 ${(lit * 100).toFixed(1)}%`}
+    >
       <svg viewBox="0 0 100 100" role="img" aria-hidden="true">
         <circle cx="50" cy="50" r="45" className={styles.phaseLight} />
         {shadowPath && <path d={shadowPath} className={styles.phaseDark} />}
@@ -48,12 +51,26 @@ function PlanetPhasePreview({ fraction }: { fraction: number }) {
 
 function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
   const [activeTab, setActiveTab] = useState<InfoTab>("position");
+  const difficulty = info.calculationFields.find(
+    ([label]) => label === "\uAD00\uCE21 \uB09C\uC774\uB3C4"
+  )?.[1];
+  const calculationValues = new Set(
+    info.calculationFields.map(([, value]) => value)
+  );
+  const physicalFields = info.physicalFields.filter(
+    ([, value]) => !calculationValues.has(value)
+  );
 
   return (
-    <section className={styles.infoPanel} aria-label="선택한 천체 정보">
+    <section className={styles.infoPanel} aria-label="\uC120\uD0DD\uD55C \uCC9C\uCCB4 \uC815\uBCF4">
       <div className={styles.infoHeader}>
-        <h2>{info.name}</h2>
-        <div className={styles.infoTabs} role="tablist" aria-label="천체 정보">
+        <h2>
+          <span>{info.name}</span>
+          {difficulty && (
+            <span className={styles.difficultyBadge}>{difficulty}</span>
+          )}
+        </h2>
+        <div className={styles.infoTabs} role="tablist" aria-label="\uCC9C\uCCB4 \uC815\uBCF4">
           {INFO_TABS.map((tab) => (
             <button
               key={tab.id}
@@ -72,10 +89,10 @@ function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
       {activeTab === "position" && (
         <InfoGrid
           items={[
-            ["고도", info.altitude],
-            ["방위각", info.azimuth],
-            ["적경", info.rightAscension],
-            ["적위", info.declination],
+            ["\uACE0\uB3C4", info.altitude],
+            ["\uBC29\uC704\uAC01", info.azimuth],
+            ["\uC801\uACBD", info.rightAscension],
+            ["\uC801\uC704", info.declination],
           ]}
         />
       )}
@@ -89,7 +106,7 @@ function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
               </span>
             ))
           ) : (
-            <p>다른 이름 정보 없음</p>
+            <p>{"\uB2E4\uB978 \uC774\uB984 \uC815\uBCF4 \uC5C6\uC74C"}</p>
           )}
         </div>
       )}
@@ -101,9 +118,9 @@ function ObjectInfoPanelContent({ info }: { info: ObjectInfo }) {
           )}
           <InfoGrid
             items={
-              info.physicalFields.length > 0
-                ? info.physicalFields
-                : [["물리량", "정보 없음"]]
+              physicalFields.length > 0
+                ? physicalFields
+                : [["\uBB3C\uB9AC\uB7C9", "\uC815\uBCF4 \uC5C6\uC74C"]]
             }
           />
         </>

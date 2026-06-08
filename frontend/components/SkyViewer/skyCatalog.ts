@@ -7,7 +7,37 @@ import type {
 } from "./types";
 
 const DEG_TO_RAD = Math.PI / 180;
-const MAX_RENDERED_STAR_MAG = 4.85;
+const DEFAULT_RENDERED_STAR_MAG = 5.3;
+const STAR_RENDER_BATCH_SIZE = 700;
+const STAR_RENDER_STEPS = [
+  { fovDegrees: 42, magnitude: 5.3 },
+  { fovDegrees: 26, magnitude: 6.0 },
+  { fovDegrees: 16, magnitude: 6.5 },
+  { fovDegrees: 10, magnitude: 7.0 },
+  { fovDegrees: 6, magnitude: 7.5 },
+];
+
+type RenderableStar = {
+  star: BrightStar;
+  obj: SweObj;
+  vector: number[];
+  label: string;
+  rendered: boolean;
+  clickTargetAdded: boolean;
+};
+
+export type BrightStarSupplement = {
+  apparentMagnitude?: number;
+  absoluteMagnitude?: number;
+  distanceParsec?: number;
+  objectType: string;
+};
+
+let starLayerState: {
+  layer: SweObj;
+  stars: RenderableStar[];
+} | null = null;
+const brightStarSupplementIndex = new Map<string, BrightStarSupplement>();
 
 export const FEATURED_STAR_NAMES = new Set(
   [
@@ -208,6 +238,70 @@ function getBayerDesignations(star: BrightStar) {
   return [...designations];
 }
 
+function getStarEngineId(star: BrightStar) {
+  if (star.hr) return `hr-${star.hr}`;
+  if (star.hip) return `hip-${star.hip}`;
+  if (star.hd) return `hd-${star.hd}`;
+  return `hyg-${star.id ?? normalizeSearchKey(star.name)}`;
+}
+
+function addBrightStarSupplementKey(key: string, info: BrightStarSupplement) {
+  const normalized = normalizeSearchKey(key);
+  if (normalized) brightStarSupplementIndex.set(normalized, info);
+}
+
+function indexBrightStarSupplement(star: BrightStar) {
+  const info: BrightStarSupplement = {
+    apparentMagnitude: star.vmag,
+    absoluteMagnitude: star.absoluteMagnitude ?? undefined,
+    distanceParsec: star.distanceParsec ?? undefined,
+    objectType: "별",
+  };
+
+  for (const name of [star.name, ...star.names, ...buildStarDesignations(star)]) {
+    addBrightStarSupplementKey(name, info);
+    addBrightStarSupplementKey(name.replace(/^NAME\s+/i, ""), info);
+  }
+
+  if (star.id) addBrightStarSupplementKey(`HYG ${star.id}`, info);
+  if (star.hip) addBrightStarSupplementKey(`HIP ${star.hip}`, info);
+  if (star.hr) {
+    addBrightStarSupplementKey(String(star.hr), info);
+    addBrightStarSupplementKey(`HR ${star.hr}`, info);
+  }
+  if (star.hd) addBrightStarSupplementKey(`HD ${star.hd}`, info);
+}
+
+function indexBrightStarSupplements(stars: BrightStar[]) {
+  brightStarSupplementIndex.clear();
+  for (const star of stars) {
+    indexBrightStarSupplement(star);
+  }
+}
+
+export function findBrightStarSupplement(
+  names: string[]
+): BrightStarSupplement | null {
+  for (const name of names) {
+    const cleaned = name.replace(/^NAME\s+/i, "").replace(/\s+/g, " ").trim();
+    const candidates = [name, cleaned];
+
+    const engineIdMatch = cleaned.match(/^(?:bsc|hr|hip|hd|hyg)-(.+)$/i);
+    if (engineIdMatch) {
+      const [, value] = engineIdMatch;
+      candidates.push(value);
+      candidates.push(cleaned.replace("-", " "));
+    }
+
+    for (const candidate of candidates) {
+      const info = brightStarSupplementIndex.get(normalizeSearchKey(candidate));
+      if (info) return info;
+    }
+  }
+
+  return null;
+}
+
 export async function loadWesternSkyculture(): Promise<SkycultureIndex> {
   const skycultureResponse = await fetch("/stellarium/skycultures/western/index.json");
   if (!skycultureResponse.ok) {
@@ -401,14 +495,16 @@ export async function loadBrightStarCatalog(
 ) {
   if (!engine.createLayer || !engine.createObj) return 0;
 
-  const response = await fetch("/catalogs/bright-star-catalog.json");
+  const response = await fetch("/catalogs/hyg-star-catalog.json");
   if (!response.ok) {
-    throw new Error(`Cannot load bright star catalog: ${response.status}`);
+    throw new Error(`Cannot load HYG star catalog: ${response.status}`);
   }
 
   const catalog = (await response.json()) as BrightStarCatalog;
+  indexBrightStarSupplements(catalog.stars);
+
   const layer = engine.createLayer({
-    id: "bright-star-catalog",
+    id: "hyg-star-catalog",
     visible: true,
     z: 7,
   });
@@ -416,20 +512,24 @@ export async function loadBrightStarCatalog(
 
   let added = 0;
   let processed = 0;
+  const renderableStars: RenderableStar[] = [];
   for (const star of catalog.stars) {
     const designations = buildStarDesignations(star);
     const vector = starToIcrfVector(star);
     const displayName = getStarDisplayName(star);
 
     const obj = engine.createObj("star", {
-      id: `bsc-${star.hr}`,
+      id: getStarEngineId(star),
       model: "star",
       model_data: {
         Vmag: star.vmag,
         vmag: star.vmag,
+        absmag: star.absoluteMagnitude,
+        dist: star.distanceParsec,
         de: star.dec,
         ra: star.ra,
         spect_t: star.spect,
+        ci: star.colorIndex,
       },
       names: designations,
       name: displayName,
@@ -440,9 +540,21 @@ export async function loadBrightStarCatalog(
 
     if (!obj) continue;
 
-    if (star.vmag <= MAX_RENDERED_STAR_MAG) {
+    const renderableStar: RenderableStar = {
+      star,
+      obj,
+      vector,
+      label: displayName,
+      rendered: false,
+      clickTargetAdded: false,
+    };
+    renderableStars.push(renderableStar);
+
+    if (star.vmag <= DEFAULT_RENDERED_STAR_MAG) {
       layer.add(obj);
       added += 1;
+      renderableStar.rendered = true;
+      renderableStar.clickTargetAdded = true;
     }
 
     for (const name of star.names) {
@@ -458,20 +570,82 @@ export async function loadBrightStarCatalog(
         });
       }
     }
-    searchIndex.set(normalizeSearchKey(String(star.hr)), obj);
-    searchIndex.set(normalizeSearchKey(`HR ${star.hr}`), obj);
+    if (star.id) searchIndex.set(normalizeSearchKey(`HYG ${star.id}`), obj);
+    if (star.hip) searchIndex.set(normalizeSearchKey(`HIP ${star.hip}`), obj);
+    if (star.hr) {
+      searchIndex.set(normalizeSearchKey(String(star.hr)), obj);
+      searchIndex.set(normalizeSearchKey(`HR ${star.hr}`), obj);
+    }
     if (star.hd) searchIndex.set(normalizeSearchKey(`HD ${star.hd}`), obj);
 
-    clickTargets.push({
-      key: normalizeSearchKey(star.name),
-      label: displayName,
-      obj,
-      vector,
-    });
+    if (renderableStar.clickTargetAdded) {
+      clickTargets.push({
+        key: normalizeSearchKey(star.name),
+        label: displayName,
+        obj,
+        vector,
+      });
+    }
 
     processed += 1;
     if (processed % 500 === 0) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+
+  starLayerState = {
+    layer,
+    stars: renderableStars,
+  };
+
+  return added;
+}
+
+function getStarMagnitudeLimitForFov(fovRadians: number) {
+  const fovDegrees = (fovRadians * 180) / Math.PI;
+  let limit = DEFAULT_RENDERED_STAR_MAG;
+
+  for (const step of STAR_RENDER_STEPS) {
+    if (fovDegrees <= step.fovDegrees) {
+      limit = Math.max(limit, step.magnitude);
+    }
+  }
+
+  return limit;
+}
+
+export function updateVisibleStarCatalog(
+  engine: StellariumEngine,
+  clickTargets: SearchSuggestion[]
+) {
+  if (!starLayerState) return 0;
+
+  const rawFov =
+    typeof engine.getValue?.("fov") === "number"
+      ? (engine.getValue("fov") as number)
+      : typeof engine.getValue?.("zoom") === "number"
+        ? (engine.getValue("zoom") as number)
+        : Math.PI / 3;
+  const fov = rawFov > Math.PI ? (rawFov * Math.PI) / 180 : rawFov;
+  const magnitudeLimit = getStarMagnitudeLimitForFov(fov);
+
+  let added = 0;
+  for (const item of starLayerState.stars) {
+    if (added >= STAR_RENDER_BATCH_SIZE) break;
+    if (item.rendered || item.star.vmag > magnitudeLimit) continue;
+
+    starLayerState.layer.add?.(item.obj);
+    item.rendered = true;
+    added += 1;
+
+    if (!item.clickTargetAdded) {
+      clickTargets.push({
+        key: normalizeSearchKey(item.star.name),
+        label: item.label,
+        obj: item.obj,
+        vector: item.vector,
+      });
+      item.clickTargetAdded = true;
     }
   }
 
